@@ -5,6 +5,7 @@ import Header from './components/Header';
 import AccountPanel from './components/AccountPanel';
 import Dashboard from './pages/Dashboard';
 import StrategyDetail from './pages/StrategyDetail';
+import Portfolio from './pages/Portfolio';
 
 export default function App() {
   const [page, setPage] = useState('dashboard');           // 'dashboard' | 'detail'
@@ -108,11 +109,13 @@ export default function App() {
 
   return (
     <div className="app-layout">
-      <Header connected={connected} status={status} time={time} />
-      {connected && <AccountPanel />}
+      <Header connected={connected} status={status} time={time} page={page} onNavigate={setPage} />
+      {connected && page !== 'portfolio' && <AccountPanel />}
 
       <main className="app-main">
-        {page === 'dashboard' ? (
+        {page === 'portfolio' ? (
+          <Portfolio />
+        ) : page === 'dashboard' ? (
           <Dashboard
             strategies={strategies}
             strategyTypes={strategyTypes}

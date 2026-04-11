@@ -1,4 +1,4 @@
-export default function Header({ connected, status }) {
+export default function Header({ connected, status, page, onNavigate }) {
   const now = new Date();
   const timeStr = now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
@@ -16,6 +16,23 @@ export default function Header({ connected, status }) {
           <div className="app-header__title">IOL Trading Platform</div>
         </div>
       </div>
+
+      {onNavigate && (
+        <div className="app-header__nav" style={{ display: 'flex', gap: '1rem', flex: 1, marginLeft: '2rem' }}>
+          <button 
+            className={`btn btn--sm ${page === 'dashboard' || page === 'detail' ? 'btn--primary' : 'btn--ghost'}`} 
+            onClick={() => onNavigate('dashboard')}
+          >
+            📊 Estrategias
+          </button>
+          <button 
+            className={`btn btn--sm ${page === 'portfolio' ? 'btn--primary' : 'btn--ghost'}`} 
+            onClick={() => onNavigate('portfolio')}
+          >
+            💼 Mi Cuenta
+          </button>
+        </div>
+      )}
 
       <div className="app-header__status">
         <div className="status-badge">

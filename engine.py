@@ -578,6 +578,26 @@ class TradingEngine:
             logger.error("Error obteniendo cuenta: %s", exc)
             return {"error": str(exc)}
 
+    async def get_portfolio_info(self) -> dict:
+        """Obtiene el portafolio actual de la cuenta IOL."""
+        if not self._client:
+            return {"error": "No conectado"}
+        try:
+            return await self._client.get_portfolio(pais="argentina")
+        except Exception as exc:
+            logger.error("Error obteniendo portafolio: %s", exc)
+            return {"error": str(exc)}
+
+    async def get_operations_info(self) -> list:
+        """Obtiene las operaciones recientes de la cuenta IOL."""
+        if not self._client:
+            return []
+        try:
+            return await self._client.get_operations(pais="argentina")
+        except Exception as exc:
+            logger.error("Error obteniendo operaciones: %s", exc)
+            return []
+
     # ── WebSocket ────────────────────────────────────────────────────────
 
     def register_ws(self, callback) -> None:

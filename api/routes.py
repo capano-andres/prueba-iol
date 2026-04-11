@@ -59,6 +59,18 @@ async def get_account() -> dict:
     return await engine.get_account_info()
 
 
+@router.get("/portfolio")
+async def get_portfolio() -> dict:
+    engine = get_engine()
+    return await engine.get_portfolio_info()
+
+
+@router.get("/operations")
+async def get_operations() -> list:
+    engine = get_engine()
+    return await engine.get_operations_info()
+
+
 @router.get("/strategy-types")
 async def get_strategy_types() -> dict:
     return STRATEGY_TYPES
