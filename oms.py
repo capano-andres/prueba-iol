@@ -166,12 +166,14 @@ class OMS:
         profile:      IOLProfile     = IOLProfile.GOLD,
         dry_run:      bool           = True,
         max_nominal:  float | None   = None,
+        cancel_timeout_s: int        = 180,
     ) -> None:
         self._client  = client
         self._mercado = mercado
         self._profile = profile
         self._dry_run = dry_run
         self._max_nominal = max_nominal   # límite de fondos asignados (None = sin límite)
+        self._cancel_timeout_s = cancel_timeout_s
 
         self._orders:    dict[str, Order]    = {}   # local_id → Order
         self._positions: dict[str, Position] = {}   # pos_id   → Position
@@ -410,10 +412,35 @@ class OMS:
                     order.precio_ejecucion = float(data.get("precio") or order.precio_limite)
                     order.cantidad_ejec    = int(data.get("cantidad") or order.cantidad)
                     order.ts_ejecucion     = datetime.now()
+                    
+                    # Create Position automatically on fill if missing
+                    pos_exists = any(p.order_apertura == order.local_id or p.order_cierre == order.local_id 
+                                     for p in self._positions.values())
+                    if not pos_exists:
+                        # Assuming it's an aperture order for simplicity unless tracked otherwise.
+                        pos = Position(
+                            simbolo=order.simbolo,
+                            tipo="CALL", # Simplification: The strategy layer should manage types, but we fulfill it here
+                            lado="LONG" if order.operacion == "compra" else "SHORT",
+                            cantidad=order.cantidad_ejec,
+                            precio_apertura=order.precio_ejecucion,
+                            comision_apertura=calc_commission(order.precio_ejecucion * order.cantidad_ejec, self._profile),
+                            order_apertura=order.local_id,
+                        )
+                        self._positions[pos.id] = pos
+                        logger.info("Posicion %s CREADA post-ejecucion: %s x%d @ %.2f", pos.id, order.simbolo, order.cantidad_ejec, order.precio_ejecucion)
+                    
                     logger.info("[LIVE] Orden %s ejecutada @ %.2f",
                                 order.local_id, order.precio_ejecucion)
+                                
                 elif estado_api in ("cancelada", "rechazada"):
                     order.estado = OrderStatus[estado_api.upper()]
+                elif estado_api in ("pendiente", "iniciada"):
+                    # Check Time-in-Force expiration
+                    elapsed = (datetime.now() - order.ts_envio).total_seconds()
+                    if elapsed > self._cancel_timeout_s:
+                        logger.warning("[LIVE] Timeout de %ds superado para orden %s. Mando cancelar...", elapsed, order.local_id)
+                        await self.cancel_order(order.local_id)
             except IOLRequestError as exc:
                 logger.warning("poll_orders: error consultando orden %s: %s",
                                order.remote_id, exc)

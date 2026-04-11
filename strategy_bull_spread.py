@@ -165,6 +165,9 @@ class SpreadPosition:
     signal:         SpreadSignal
     net_premium_paid: float
     is_open:        bool = True
+    status:         str  = "PENDING"  # PENDING | OPEN | CLOSED
+    long_order_id:  str  = ""
+    short_order_id: str  = ""
 
     @property
     def max_gain(self) -> float:
@@ -436,7 +439,7 @@ class BullCallSpreadStrategy:
             precio_limite = long_q.ask,  # pagamos el ask
         )
 
-        if long_order.estado.value not in ("ejecutada",):
+        if long_order.estado.value in ("rechazada", "cancelada"):
             logger.warning(
                 "BullSpread: Pata larga rechazada (%s). Spread abortado.",
                 long_order.estado.value,
@@ -452,57 +455,46 @@ class BullCallSpreadStrategy:
             precio_limite = short_q.bid,  # cobramos el bid
         )
 
-        if short_order.estado.value not in ("ejecutada",):
+        if short_order.estado.value in ("rechazada", "cancelada"):
             logger.warning(
-                "BullSpread: Pata corta rechazada (%s). Iniciando ROLLBACK de la pata larga...",
+                "BullSpread: Pata corta rechazada/cancelada (%s). Iniciando ROLLBACK de pata larga...",
                 short_order.estado.value,
             )
-            # --- ROLLBACK: cerrar la pata larga para evitar posición huérfana ---
-            long_pos_id_rb = self._ultimo_pos_id(long_q.simbolo)
-            if long_pos_id_rb:
-                precio_rb = long_q.bid or long_q.ask or long_q.ultimo or 0.01
-                try:
-                    await self._oms.close_position(long_pos_id_rb, precio_limite=precio_rb)
-                    logger.info(
-                        "BullSpread ROLLBACK: Pata larga %s cerrada (precio=%.2f).",
-                        long_q.simbolo, precio_rb,
-                    )
-                except Exception as exc:
-                    logger.error(
-                        "BullSpread ROLLBACK FALLIDO: No se pudo cerrar pata larga %s: %s. "
-                        "REVISAR MANUALMENTE.",
-                        long_q.simbolo, exc,
-                    )
+            if long_order.estado.value == "pendiente":
+                await self._oms.cancel_order(long_order.local_id)
             else:
-                logger.error(
-                    "BullSpread ROLLBACK: No se encontró posición para %s. REVISAR MANUALMENTE.",
-                    long_q.simbolo,
-                )
-            return None
-
-        # Buscar los IDs de Position creados por el OMS
-        long_pos_id  = self._ultimo_pos_id(long_q.simbolo)
-        short_pos_id = self._ultimo_pos_id(short_q.simbolo)
-
-        if not long_pos_id:
-            logger.error("BullSpread: No se encontró position_id para la pata larga.")
+                long_pos_id_rb = self._ultimo_pos_id(long_q.simbolo)
+                if long_pos_id_rb:
+                    precio_rb = long_q.bid or long_q.ask or long_q.ultimo or 0.01
+                    try:
+                        await self._oms.close_position(long_pos_id_rb, precio_limite=precio_rb)
+                        logger.info("BullSpread ROLLBACK: Pata larga cerrada (precio=%.2f).", precio_rb)
+                    except Exception as exc:
+                        logger.error("BullSpread ROLLBACK FALLIDO: %s", exc)
             return None
 
         self._counter += 1
         group_id = f"bcs_{self._counter:04d}"
 
+        # Al principio no tenemos pos_ids porque están pendientes. Se las asignamos vacías y las llenará el monitor.
+        from oms import OrderStatus
+        is_instantly_open = (long_order.estado == OrderStatus.EJECUTADA and short_order.estado == OrderStatus.EJECUTADA)
+
         spread = SpreadPosition(
             group_id         = group_id,
-            long_pos_id      = long_pos_id,
-            short_pos_id     = short_pos_id or "",
+            long_pos_id      = self._ultimo_pos_id(long_q.simbolo) if long_order.estado == OrderStatus.EJECUTADA else "",
+            short_pos_id     = self._ultimo_pos_id(short_q.simbolo) if short_order.estado == OrderStatus.EJECUTADA else "",
             signal           = signal,
             net_premium_paid = signal.net_premium,
+            status           = "OPEN" if is_instantly_open else "PENDING",
+            long_order_id    = long_order.local_id,
+            short_order_id   = short_order.local_id,
         )
         self._open_spreads[group_id] = spread
 
         logger.info(
-            "BullSpread [%s]: Spread ABIERTO | prima_neta=%.2f | max_profit=%.2f | BEP=%.2f",
-            group_id, signal.net_premium, signal.max_profit, signal.breakeven,
+            "BullSpread [%s]: Spread %s | prima_neta=%.2f | max_profit=%.2f | BEP=%.2f",
+            group_id, spread.status, signal.net_premium, signal.max_profit, signal.breakeven,
         )
         return spread
 
@@ -528,6 +520,57 @@ class BullCallSpreadStrategy:
         for group_id, spread in list(self._open_spreads.items()):
             if not spread.is_open:
                 continue
+
+            # --- Resolución de Spreads Pendientes (ANTI-LEGGING) ---
+            if spread.status == "PENDING":
+                l_ord = self._oms._orders.get(spread.long_order_id)
+                s_ord = self._oms._orders.get(spread.short_order_id)
+                if not l_ord or not s_ord:
+                    continue
+                
+                # Check if both filled
+                from oms import OrderStatus
+                if l_ord.estado == OrderStatus.EJECUTADA and s_ord.estado == OrderStatus.EJECUTADA:
+                    spread.status = "OPEN"
+                    spread.long_pos_id = self._find_pos_by_order(l_ord.local_id) or ""
+                    spread.short_pos_id = self._find_pos_by_order(s_ord.local_id) or ""
+                    logger.info("BullSpread [%s]: Spread PENDIENTE -> OPEN (Ejecutado al fin)", group_id)
+                    continue
+
+                # Check if anyone is cancelled (e.g. by 180s timeout or market reject)
+                l_fail = l_ord.estado in (OrderStatus.CANCELADA, OrderStatus.RECHAZADA)
+                s_fail = s_ord.estado in (OrderStatus.CANCELADA, OrderStatus.RECHAZADA)
+                
+                if l_fail and s_fail:
+                    spread.status = "CLOSED"
+                    spread.is_open = False
+                    logger.info("BullSpread [%s]: PENDIENTE -> CANCELADO (Ambas patas expiraron/rechazadas)", group_id)
+                    continue
+                elif l_fail and s_ord.estado == OrderStatus.EJECUTADA:
+                    # Legging risk: short was filled, long was cancelled! Must close Short leg at market!
+                    pos_id = self._find_pos_by_order(s_ord.local_id)
+                    if pos_id:
+                        mid = mid_map.get(s_ord.simbolo) or s_ord.precio_limite
+                        logger.warning("BullSpread [%s]: ANTI-LEGGING: Pata compra cancelada pero Venta ejecutada. Liquidando Venta pos %s", group_id, pos_id)
+                        await self._oms.close_position(pos_id, precio_limite=mid)
+                    spread.status = "CLOSED"
+                    spread.is_open = False
+                    continue
+                elif s_fail and l_ord.estado == OrderStatus.EJECUTADA:
+                    # Legging risk: long filled, short cancelled!
+                    pos_id = self._find_pos_by_order(l_ord.local_id)
+                    if pos_id:
+                        mid = mid_map.get(l_ord.simbolo) or l_ord.precio_limite
+                        logger.warning("BullSpread [%s]: ANTI-LEGGING: Pata Venta cancelada pero Compra ejecutada. Liquidando Compra pos %s", group_id, pos_id)
+                        await self._oms.close_position(pos_id, precio_limite=mid)
+                    spread.status = "CLOSED"
+                    spread.is_open = False
+                    continue
+                else:
+                    # Aún PENDIENTE (esperando fill)
+                    continue
+
+            # --- Spreads Activos (OPEN) ---
 
             long_signal  = spread.signal.long_leg.quote
             short_signal = spread.signal.short_leg.quote
@@ -623,6 +666,13 @@ class BullCallSpreadStrategy:
             return None
         # La más reciente tiene la fecha de apertura más alta
         return max(abiertas, key=lambda p: p.fecha_apertura).id
+
+    def _find_pos_by_order(self, order_local_id: str) -> str | None:
+        """Encuentra la Position generada por una order_apertura."""
+        for p in self._oms._positions.values():
+            if p.order_apertura == order_local_id:
+                return p.id
+        return None
 
     # ── Métricas ─────────────────────────────────────────────────────────
 
