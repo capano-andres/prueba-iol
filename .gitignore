@@ -1,0 +1,36 @@
+# Entornos virtuales
+venv/
+.venv/
+env/
+ENV/
+
+# Python caching
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Variables de entorno y credenciales
+.env
+.env.local
+.env.*
+!.env.example
+
+# Base de datos local
+trading_platform.db
+*.sqlite3
+*.db
+
+# Logs y temporales
+*.log
+scratch/
+_validate_*.py
+
+# IDE y editores
+.vscode/
+.idea/
+.claude/
+
+# Frontend (Vite/React)
+frontend/node_modules/
+frontend/dist/
+frontend/.eslintcache
