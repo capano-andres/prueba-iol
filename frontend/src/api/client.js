@@ -1,0 +1,82 @@
+const API_BASE = 'http://localhost:8000/api';
+const WS_BASE = 'ws://localhost:8000/ws/live';
+
+// ─── REST Client ────────────────────────────────────────────────────────────
+
+async function request(path, options = {}) {
+  const url = `${API_BASE}${path}`;
+  const res = await fetch(url, {
+    headers: { 'Content-Type': 'application/json', ...options.headers },
+    ...options,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export const api = {
+  getStatus: () => request('/status'),
+  getAccount: () => request('/account'),
+  getStrategyTypes: () => request('/strategy-types'),
+  getStrategies: () => request('/strategies'),
+  getStrategy: (id) => request(`/strategies/${id}`),
+  createStrategy: (data) => request('/strategies', { method: 'POST', body: JSON.stringify(data) }),
+  updateStrategy: (id, data) => request(`/strategies/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteStrategy: (id) => request(`/strategies/${id}`, { method: 'DELETE' }),
+  startStrategy: (id) => request(`/strategies/${id}/start`, { method: 'POST' }),
+  pauseStrategy: (id) => request(`/strategies/${id}/pause`, { method: 'POST' }),
+  stopStrategy: (id) => request(`/strategies/${id}/stop`, { method: 'POST' }),
+  getStrategyLogs: (id, limit = 50) => request(`/strategies/${id}/logs?limit=${limit}`),
+};
+
+// ─── WebSocket Hook ─────────────────────────────────────────────────────────
+
+export function createWebSocket(onMessage) {
+  let ws = null;
+  let reconnectTimer = null;
+  let isClosing = false;
+
+  function connect() {
+    if (isClosing) return;
+    ws = new WebSocket(WS_BASE);
+
+    ws.onopen = () => {
+      console.log('[WS] Connected');
+      if (onMessage) onMessage({ type: 'ws_connected' });
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'heartbeat') return;
+        if (onMessage) onMessage(data);
+      } catch (e) {
+        console.warn('[WS] Parse error:', e);
+      }
+    };
+
+    ws.onclose = () => {
+      console.log('[WS] Disconnected');
+      if (onMessage) onMessage({ type: 'ws_disconnected' });
+      if (!isClosing) {
+        reconnectTimer = setTimeout(connect, 3000);
+      }
+    };
+
+    ws.onerror = (err) => {
+      console.error('[WS] Error:', err);
+      ws.close();
+    };
+  }
+
+  function close() {
+    isClosing = true;
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (ws) ws.close();
+  }
+
+  connect();
+  return { close };
+}
