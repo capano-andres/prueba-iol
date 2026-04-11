@@ -201,11 +201,16 @@ class OMS:
 
     @property
     def nominal_en_uso(self) -> float:
-        """Nominal total de posiciones abiertas."""
-        return sum(
+        """Nominal total de posiciones abiertas y órdenes pendientes."""
+        nom_abiertas = sum(
             p.precio_apertura * p.cantidad
             for p in self.posiciones_abiertas()
         )
+        nom_pendientes = sum(
+            o.cantidad * o.precio_limite
+            for o in self.ordenes_pendientes()
+        )
+        return nom_abiertas + nom_pendientes
 
     def pnl_realizado_total(self) -> float:
         total = 0.0

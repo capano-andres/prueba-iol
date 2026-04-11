@@ -100,7 +100,7 @@ class Strategy:
 
     async def ejecutar_signals(self, signals: list[TradeSignal]) -> None:
         """Ejecuta señales en orden de score respetando el límite de posiciones."""
-        abiertas  = len(self._oms.posiciones_abiertas())
+        abiertas  = len(self._oms.posiciones_abiertas()) + len(self._oms.ordenes_pendientes())
         max_pos   = self._config.max_posiciones_abiertas
 
         for signal in signals:
