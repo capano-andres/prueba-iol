@@ -120,8 +120,9 @@ body {
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border-primary);
   padding: 0 2rem;
-  height: 60px;
+  min-height: 60px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   position: sticky;
@@ -129,6 +130,14 @@ body {
   z-index: 100;
   backdrop-filter: blur(12px);
   background: rgba(17, 24, 39, 0.85);
+}
+
+@media (max-width: 768px) {
+  .app-header {
+    padding: 1rem;
+    gap: 1rem;
+    justify-content: center;
+  }
 }
 
 .app-header__brand {
@@ -161,8 +170,10 @@ body {
 
 .app-header__status {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   align-items: center;
-  gap: 1.5rem;
+  gap: 1rem;
 }
 
 .status-badge {
@@ -209,6 +220,13 @@ body {
   width: 100%;
 }
 
+@media (max-width: 768px) {
+  .app-main {
+    padding: 1rem;
+  }
+}
+
+
 /* ─── Cards ──────────────────────────────────────────────────────────────── */
 
 .card {
@@ -251,9 +269,15 @@ body {
 
 .strategy-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 1.25rem;
   margin-top: 1.5rem;
+}
+
+@media (max-width: 400px) {
+  .strategy-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .strategy-card {
@@ -883,6 +907,12 @@ body {
   gap: 1.25rem;
 }
 
+@media (max-width: 768px) {
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .detail-grid--full {
   grid-template-columns: 1fr;
 }
@@ -954,6 +984,7 @@ body {
 
 .account-panel-grid {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 2rem;
   background: var(--bg-card);
@@ -963,6 +994,22 @@ body {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   backdrop-filter: blur(10px);
 }
+
+@media (max-width: 768px) {
+  .account-panel-grid {
+    gap: 1rem;
+    padding: 1rem;
+    justify-content: center;
+  }
+  .account-panel-divider {
+    display: none;
+  }
+  .account-panel-item {
+    align-items: center;
+    width: 45%;
+  }
+}
+
 
 .account-panel-item {
   display: flex;
