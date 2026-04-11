@@ -1,5 +1,13 @@
 # Contexto del Proyecto: Bot de Opciones GGAL — IOL API v2
 
+## Historial de Implementación (Últimas Actualizaciones)
+- **Detección Dinámica en Frontend (Railway):** Resolución de CORS y WebSockets en producción sin dependencia de `.env` en runtime (detecta protocolo `ws/wss` automáticamente en `client.js`).
+- **Límites de Capital Dinámicos:** Módulo de fondos con stop-loss global (*Max Drawdown*), protegiendo contra vaciamientos masivos y auto-clausurando posiciones nocivas.
+- **Cancel & Replace Diferido (Mecanismo "180s Time in Force"):** Para mercados de baja liquidez, si las órdenes límite permanecen colgadas por más de 180 segundos sin comprador, el bot cancela la orden frente a IOL y recupera el slot de inversión.
+- **Protección Anti-Legging:** En spreads algorítmicos complejos, si una pata se ejecuta exitosamente pero la contraria se auto-cancela por Time-Out, liquida forzosamente la pata superviviente a punta compradora de mercado para prevenir exposición o *naked calls*.
+- **Panel Intradiario de Cuenta:** Incorporación del `AccountPanel.jsx` esmerilado que decodifica flujos de ARS desde IOL en el Navbar del Dashboard.
+
+
 ## Resumen ejecutivo
 
 Bot de trading algorítmico intradiario que opera la cadena de opciones de **Grupo Financiero Galicia (GGAL)** en la **Bolsa de Buenos Aires (ByMA)** a través de la API REST v2 de **InvertirOnline (IOL)**. La ventaja estructural del sistema es la **bonificación del 100% de la comisión IOL en la pata de cierre intradiario**, lo que reduce el costo del round-trip de ~1.09% a ~0.24% (solo Derechos ByMA).
@@ -248,6 +256,17 @@ Dashboard financiero oscuro tipo Bloomberg:
 
 2. **Strategy Detail** (`pages/StrategyDetail.jsx`):
    - Stats de la estrategia (P&L, posiciones, fondos, spot)
+
+---
+
+## Fase 2: El Futuro "Oráculo Macro" (Agentic Pre-Market Analyzer)
+
+Como desarrollo planificado para la Fase 2, el Bot evolucionará integrándose con **Claude API (Anthropic)** o llm similar vía CRON, funcionando como un **Agente Analista Autómata** cada mañana:
+
+1. A las **9:30 AM**, una tarea extrae datos macro: cotización de Puntas ADR, IV de Cierre, titularidades locales y tasas de cauciones actuales.
+2. Formatea este contexto y lo despacha al LLM con el Rol de *Hedge Fund Manager*.
+3. El Agente devuelve su decisión algorítmica y razonamiento en formato JSON mediante Endpoint `POST /api/strategies`.
+4. El sistema inicia en caliente la pre-configuración validada, otorgándole al bot los fondos designados e iniciándolo para que trabaje a solas desde las 10:30 AM de BYMA.
    - Tabla de posiciones abiertas con P&L no realizado
    - Feed de señales activas
    - Log viewer estilo terminal
