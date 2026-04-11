@@ -84,31 +84,50 @@ export default function Portfolio() {
                   <thead>
                     <tr>
                       <th>Símbolo</th>
-                      <th>Descripción</th>
+                      <th className="hide-mobile">Descripción</th>
                       <th style={{ textAlign: 'right' }}>Cantidad</th>
                       <th style={{ textAlign: 'right' }}>Último Precio</th>
-                      <th style={{ textAlign: 'right' }}>Valorización</th>
+                      <th style={{ textAlign: 'right' }} className="hide-mobile">Valorización</th>
                       <th style={{ textAlign: 'right' }}>Var. Diaria</th>
+                      <th style={{ textAlign: 'right' }}>Rendimiento %</th>
+                      <th style={{ textAlign: 'right' }}>Total (ARS)</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {portfolio.activos.map(activo => (
+                    {portfolio.activos.map(activo => {
+                      const gananciaPct = activo.gananciaPorcentaje || 0;
+                      const gananciaDinero = activo.gananciaDinero || 0;
+                      
+                      return (
                       <tr key={`${activo.titulo?.simbolo}`}>
                         <td>
                           <span className="strategy-card__tag tag--asset">{activo.titulo?.simbolo}</span>
                         </td>
-                        <td>{activo.titulo?.descripcion}</td>
+                        <td className="hide-mobile">{activo.titulo?.descripcion}</td>
                         <td style={{ textAlign: 'right' }}>{activo.cantidad}</td>
                         <td style={{ textAlign: 'right' }}>{formatARS(activo.ultimoPrecio)}</td>
-                        <td style={{ textAlign: 'right', fontWeight: 'bold' }}>{formatARS(activo.valorizado)}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 'bold' }} className="hide-mobile">{formatARS(activo.valorizado)}</td>
                         <td style={{ 
                           textAlign: 'right', 
                           color: activo.variacionDiaria >= 0 ? 'var(--color-profit)' : 'var(--color-loss)' 
                         }}>
                           {activo.variacionDiaria >= 0 ? '+' : ''}{activo.variacionDiaria?.toFixed(2)}%
                         </td>
+                        <td style={{ 
+                          textAlign: 'right', 
+                          fontWeight: '600',
+                          color: gananciaPct >= 0 ? 'var(--color-profit)' : 'var(--color-loss)' 
+                        }}>
+                          {gananciaPct >= 0 ? '+' : ''}{gananciaPct.toFixed(2)}%
+                        </td>
+                        <td style={{ 
+                          textAlign: 'right', 
+                          color: gananciaDinero >= 0 ? 'var(--color-profit)' : 'var(--color-loss)' 
+                        }}>
+                          {gananciaDinero >= 0 ? '+' : ''}{formatARS(gananciaDinero)}
+                        </td>
                       </tr>
-                    ))}
+                    )})}
                   </tbody>
                 </table>
               </div>
@@ -148,7 +167,8 @@ export default function Portfolio() {
                       return (
                         <tr key={op.numero}>
                           <td style={{ whiteSpace: 'nowrap' }}>
-                            {fechaDate.toLocaleDateString('es-AR')} {fechaDate.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}
+                            <span className="hide-mobile">{fechaDate.toLocaleDateString('es-AR')} </span>
+                            {fechaDate.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}
                           </td>
                           <td>
                             <span className={`strategy-card__tag ${isVenta ? 'tag--live' : 'tag--type'}`} style={{ width: '60px', textAlign: 'center', display: 'inline-block' }}>

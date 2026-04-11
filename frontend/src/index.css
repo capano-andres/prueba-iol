@@ -1046,3 +1046,4 @@ body {
 .fade-in {
   animation: fadeIn var(--transition-base) ease-out;
 }
+@media (max-width: 600px) { .hide-mobile { display: none; } }
