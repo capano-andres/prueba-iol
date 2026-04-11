@@ -1,5 +1,8 @@
-const API_BASE = 'http://localhost:8000/api';
-const WS_BASE = 'ws://localhost:8000/ws/live';
+const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+const API_BASE = isLocalhost ? 'http://localhost:8000/api' : '/api';
+const WS_BASE = isLocalhost 
+  ? 'ws://localhost:8000/ws/live' 
+  : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/live`;
 
 // ─── REST Client ────────────────────────────────────────────────────────────
 
