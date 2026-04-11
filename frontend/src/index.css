@@ -941,3 +941,61 @@ body {
 .mt-2 { margin-top: 0.5rem; }
 .mt-4 { margin-top: 1rem; }
 .mb-2 { margin-bottom: 0.5rem; }
+
+/* ─── Account Panel ──────────────────────────────────────────────────────── */
+
+.account-panel-container {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 0 2rem;
+  margin-bottom: -0.5rem;
+  margin-top: 1rem;
+}
+
+.account-panel-grid {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  padding: 1rem 2rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  backdrop-filter: blur(10px);
+}
+
+.account-panel-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.account-panel-divider {
+  width: 1px;
+  height: 30px;
+  background: var(--border-primary);
+}
+
+.account-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+.account-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.value-green {
+  color: var(--status-running);
+  text-shadow: 0 0 10px rgba(0, 217, 126, 0.2);
+}
+
+.fade-in {
+  animation: fadeIn var(--transition-base) ease-out;
+}

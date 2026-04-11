@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import './index.css';
 import { api, createWebSocket } from './api/client';
 import Header from './components/Header';
+import AccountPanel from './components/AccountPanel';
 import Dashboard from './pages/Dashboard';
 import StrategyDetail from './pages/StrategyDetail';
 
@@ -108,6 +109,7 @@ export default function App() {
   return (
     <div className="app-layout">
       <Header connected={connected} status={status} time={time} />
+      {connected && <AccountPanel />}
 
       <main className="app-main">
         {page === 'dashboard' ? (

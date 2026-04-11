@@ -249,6 +249,16 @@ class TradingEngine:
         slot = self._slots.get(slot_id)
         return slot.to_dict() if slot else None
 
+    async def get_account_info(self) -> dict:
+        """Fetch real-time account state from IOL."""
+        if not self._client:
+            return {"error": "No conectado a IOL"}
+        try:
+            return await self._client.get_account_state()
+        except Exception as exc:
+            logger.error(f"Error fetching account info: {exc}")
+            return {"error": str(exc)}
+            
     def get_slot_logs(self, slot_id: str, limit: int = 50) -> list[dict]:
         slot = self._slots.get(slot_id)
         if not slot:
