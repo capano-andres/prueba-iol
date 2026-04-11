@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # ─── Horario de mercado (ByMA, zona Argentina UTC-3) ─────────────────────────
 
 _TZ_ARG          = timezone(timedelta(hours=-3))   # Argentina UTC-3, sin DST
-_MARKET_OPEN     = time(11, 0)
+_MARKET_OPEN     = time(10, 30)
 _MARKET_CLOSE    = time(17, 0)
 _PRECLOSE_CUTOFF = time(16, 45)   # a partir de aquí se cierran posiciones abiertas
 

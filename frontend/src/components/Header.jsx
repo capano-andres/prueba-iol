@@ -3,7 +3,10 @@ export default function Header({ connected, status }) {
   const timeStr = now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
   const day = now.getDay();
-  const isMarketHours = day !== 0 && day !== 6 && now.getHours() >= 11 && now.getHours() < 17;
+  const isMarketHours = day !== 0 && day !== 6 && (
+    (now.getHours() === 10 && now.getMinutes() >= 30) ||
+    (now.getHours() > 10 && now.getHours() < 17)
+  );
 
   return (
     <header className="app-header" id="app-header">
