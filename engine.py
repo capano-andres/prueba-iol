@@ -44,6 +44,7 @@ STRATEGY_TYPES = {
             {"key": "max_delta_abs",      "label": "Max |Delta|",      "type": "float", "default": 0.85},
             {"key": "lote_base",          "label": "Lote Base",        "type": "int",   "default": 1},
             {"key": "max_posiciones_abiertas", "label": "Max Posiciones", "type": "int", "default": 5},
+            {"key": "max_drawdown_ars",   "label": "Max Drawdown (Global Stop Loss ARS)", "type": "int", "default": 0},
         ],
     },
     "bull_call_spread": {
@@ -63,10 +64,11 @@ STRATEGY_TYPES = {
             {"key": "max_spread_pct",       "label": "Max Spread Bid-Ask",     "type": "float", "default": 0.25},
             {"key": "lotes_por_spread",     "label": "Lotes x Spread",         "type": "int",   "default": 1},
             {"key": "max_spreads_abiertos", "label": "Max Spreads Simultáneos","type": "int",   "default": 3},
-            {"key": "stop_loss_pct",        "label": "Stop Loss %",            "type": "float", "default": 0.80},
-            {"key": "take_profit_pct",      "label": "Take Profit %",          "type": "float", "default": 0.65},
+            {"key": "stop_loss_pct",        "label": "Stop Loss (Por Spread) %", "type": "float", "default": 0.80},
+            {"key": "take_profit_pct",      "label": "Take Profit (Por Spread) %", "type": "float", "default": 0.65},
             {"key": "min_reward_risk_ratio","label": "Min Reward/Risk",        "type": "float", "default": 0.80},
             {"key": "force_intraday_close", "label": "Cierre Intradiario",     "type": "bool",  "default": False},
+            {"key": "max_drawdown_ars",     "label": "Stop Loss Global (Global Max Drawdown ARS)", "type": "int", "default": 0},
         ],
     },
 }
@@ -424,6 +426,21 @@ class TradingEngine:
 
             # OMS hook (poll órdenes + cierre automático 16:45)
             await _slot._oms.on_snapshot(snapshot)
+
+            # ── Max Drawdown (Global Stop Loss) ──
+            max_drawdown = _slot.config.get("max_drawdown_ars", 0)
+            if max_drawdown > 0:
+                slot_info = _slot.to_dict()
+                unrealized = sum(p.get("pnl_no_realizado") or 0 for p in slot_info.get("posiciones_abiertas", []))
+                realized = slot_info.get("pnl_realizado", 0)
+                total_pnl = realized + unrealized
+                
+                # Si estamos perdiendo más del max_drawdown configurado
+                if total_pnl <= -max_drawdown:
+                    _slot.add_log("CRITICAL", f"⚠️ GLOBAL STOP LOSS ALCANZADO: P&L {total_pnl:.2f} ARS <= -{max_drawdown}. FORZANDO CIERRE Y APAGADO...")
+                    # Ejecutar apagado asíncrono y salir de este snapshot
+                    asyncio.create_task(self.stop_strategy(_slot.id))
+                    return
 
             # ── Dispatch por tipo de estrategia ──────────────────────────
             if _slot.tipo_estrategia == "bull_call_spread":
