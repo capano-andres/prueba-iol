@@ -181,6 +181,38 @@ async def get_positions_history(
         return [dict(r) for r in rows]
 
 
+async def get_win_rate_stats(slot_id: str) -> dict:
+    """Calcula las estadísticas de Win Rate para un slot_id a partir del historial."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT 
+                COUNT(*) as total_trades,
+                SUM(CASE WHEN pnl_realizado > 0 THEN 1 ELSE 0 END) as ganadoras,
+                SUM(CASE WHEN pnl_realizado <= 0 THEN 1 ELSE 0 END) as perdedoras
+               FROM positions_history
+               WHERE slot_id = ?""",
+            (slot_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return {"total": 0, "ganadas": 0, "perdidas": 0, "win_rate": 0.0}
+        
+        total = row["total_trades"]
+        if not total:
+            return {"total": 0, "ganadas": 0, "perdidas": 0, "win_rate": 0.0}
+        
+        ganadas = row["ganadoras"] or 0
+        perdidas = row["perdedoras"] or 0
+        win_rate = (ganadas / total) * 100.0 if total > 0 else 0.0
+        
+        return {
+            "total": total,
+            "ganadas": ganadas,
+            "perdidas": perdidas,
+            "win_rate": win_rate
+        }
+
 # ── P&L diario ──────────────────────────────────────────────────────────────
 
 async def upsert_daily_pnl(

@@ -18,6 +18,13 @@ class CreateStrategyRequest(BaseModel):
     dry_run: bool = Field(default=True)
 
 
+class ConfigureAIRequest(BaseModel):
+    activo: str = Field(...)
+    mercado: str = Field(default="bCBA")
+    tipo_estrategia: str = Field(...)
+    fondos_asignados: float = Field(default=0.0)
+
+
 class UpdateStrategyRequest(BaseModel):
     nombre: str | None = None
     activo: str | None = None

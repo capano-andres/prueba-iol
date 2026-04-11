@@ -86,6 +86,7 @@ export default function Portfolio() {
                       <th>Símbolo</th>
                       <th className="hide-mobile">Descripción</th>
                       <th style={{ textAlign: 'right' }}>Cantidad</th>
+                      <th style={{ textAlign: 'right' }}>Precio Prom.</th>
                       <th style={{ textAlign: 'right' }}>Último Precio</th>
                       <th style={{ textAlign: 'right' }} className="hide-mobile">Valorización</th>
                       <th style={{ textAlign: 'right' }}>Var. Diaria</th>
@@ -105,6 +106,7 @@ export default function Portfolio() {
                         </td>
                         <td className="hide-mobile">{activo.titulo?.descripcion}</td>
                         <td style={{ textAlign: 'right' }}>{activo.cantidad}</td>
+                        <td style={{ textAlign: 'right' }}>{formatARS(activo.ppc)}</td>
                         <td style={{ textAlign: 'right' }}>{formatARS(activo.ultimoPrecio)}</td>
                         <td style={{ textAlign: 'right', fontWeight: 'bold' }} className="hide-mobile">{formatARS(activo.valorizado)}</td>
                         <td style={{ 
@@ -157,13 +159,16 @@ export default function Portfolio() {
                       <th>Símbolo</th>
                       <th style={{ textAlign: 'right' }}>Cantidad</th>
                       <th style={{ textAlign: 'right' }}>Precio</th>
-                      <th>Estado</th>
+                      <th style={{ textAlign: 'right' }}>Monto Total</th>
+                      <th style={{ textAlign: 'center' }}>Estado</th>
                     </tr>
                   </thead>
                   <tbody>
                     {operations.slice(0, 50).map(op => {
                       const fechaDate = new Date(op.fechaOrden || op.fecha);
                       const isVenta = String(op.tipo).toLowerCase().includes('venta');
+                      const montoTotal = op.montoOperado || op.monto || ((op.cantidadOperada || op.cantidad || 0) * (op.precioOperado || op.precio || 0));
+                      
                       return (
                         <tr key={op.numero}>
                           <td style={{ whiteSpace: 'nowrap' }}>
@@ -171,7 +176,7 @@ export default function Portfolio() {
                             {fechaDate.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}
                           </td>
                           <td>
-                            <span className={`strategy-card__tag ${isVenta ? 'tag--live' : 'tag--type'}`} style={{ width: '60px', textAlign: 'center', display: 'inline-block' }}>
+                            <span className={`strategy-card__tag ${isVenta ? 'tag--live' : 'tag--type'}`} style={{ minWidth: '60px', textAlign: 'center', display: 'inline-block', whiteSpace: 'nowrap' }}>
                               {op.tipo}
                             </span>
                           </td>
@@ -180,7 +185,8 @@ export default function Portfolio() {
                           </td>
                           <td style={{ textAlign: 'right' }}>{op.cantidadOperada || op.cantidad || 0}</td>
                           <td style={{ textAlign: 'right' }}>{formatARS(op.precioOperado || op.precio || 0)}</td>
-                          <td>
+                          <td style={{ textAlign: 'right', fontWeight: '500' }}>{formatARS(montoTotal)}</td>
+                          <td style={{ textAlign: 'center' }}>
                             <span style={{ 
                               color: op.estado === 'terminada' ? 'var(--color-profit)' 
                                    : op.estado === 'cancelada' || op.estado === 'rechazada' ? 'var(--color-loss)' 

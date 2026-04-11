@@ -28,7 +28,18 @@ export default function StrategyDetail({ strategyId, strategy, onBack, onRefresh
   }
 
   const s = strategy;
-  const pnl = s.pnl_realizado || 0;
+  const pnlRealizado = s.pnl_realizado || 0;
+  const pnlNoRealizado = s.pnl_no_realizado_total || 0;
+  const pnlTotal = pnlRealizado + pnlNoRealizado;
+  
+  const winStats = s.win_stats || { total: 0, ganadas: 0, perdidas: 0, win_rate: 0 };
+  const maxDrawdown = s.config?.max_drawdown_ars || 0;
+  
+  // Calcular % de drawdown consumido (solo si estamos perdiendo)
+  let drawdownPct = 0;
+  if (maxDrawdown > 0 && pnlTotal < 0) {
+    drawdownPct = Math.min((Math.abs(pnlTotal) / maxDrawdown) * 100, 100);
+  }
 
   async function handleStart() {
     try { await api.startStrategy(s.id); onRefresh?.(); }
@@ -83,14 +94,86 @@ export default function StrategyDetail({ strategyId, strategy, onBack, onRefresh
 
       {/* Summary Stats */}
       <div className="summary-stats">
-        <div className="summary-stat">
-          <div className="summary-stat__label">P&L Realizado</div>
+        {/* P&L Total */}
+        <div className="summary-stat" style={{ borderLeft: '3px solid', borderLeftColor: pnlTotal >= 0 ? 'var(--color-profit)' : 'var(--color-loss)', paddingLeft: '1rem' }}>
+          <div className="summary-stat__label">P&L Total (Realizado + Vivo)</div>
           <div className="summary-stat__value" style={{
-            color: pnl >= 0 ? 'var(--color-profit)' : 'var(--color-loss)'
+            color: pnlTotal >= 0 ? 'var(--color-profit)' : 'var(--color-loss)',
+            fontSize: '1.5rem'
           }}>
-            {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} ARS
+            {pnlTotal >= 0 ? '+' : ''}{pnlTotal.toFixed(2)} ARS
+          </div>
+          <div style={{ fontSize: '0.75rem', marginTop: '0.25rem', color: 'var(--text-muted)' }}>
+            Realizado: <span style={{ color: pnlRealizado >= 0 ? 'var(--color-profit)' : 'var(--color-loss)' }}>{pnlRealizado >= 0 ? '+' : ''}{pnlRealizado.toFixed(2)}</span> | 
+            Vivo: <span style={{ color: pnlNoRealizado >= 0 ? 'var(--color-profit)' : 'var(--color-loss)' }}>{pnlNoRealizado >= 0 ? '+' : ''}{pnlNoRealizado.toFixed(2)}</span>
           </div>
         </div>
+
+        {/* Riesgo (Griegas) */}
+        <div className="summary-stat">
+          <div className="summary-stat__label">Exposición Direccional (Griegas Netas)</div>
+          <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
+            <div style={{ background: 'var(--bg-primary)', padding: '0.25rem 0.5rem', borderRadius: '4px' }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginRight: '0.5rem' }}>Δ Delta</span>
+              <span style={{ 
+                fontWeight: 'bold', 
+                color: s.net_delta > 0 ? 'var(--color-profit)' : s.net_delta < 0 ? 'var(--color-loss)' : 'var(--text-primary)' 
+              }}>
+                {s.net_delta ? s.net_delta.toFixed(2) : '0.00'}
+              </span>
+            </div>
+            <div style={{ background: 'var(--bg-primary)', padding: '0.25rem 0.5rem', borderRadius: '4px' }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginRight: '0.5rem' }}>ν Vega</span>
+              <span style={{ 
+                fontWeight: 'bold', 
+                color: 'var(--color-warning)'
+              }}>
+                {s.net_vega ? s.net_vega.toFixed(2) : '0.00'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Win Rate */}
+        <div className="summary-stat">
+          <div className="summary-stat__label">Win Rate (Histórico)</div>
+          <div className="summary-stat__value" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span>{winStats.win_rate.toFixed(1)}%</span>
+            <span style={{ fontSize: '0.75rem', fontWeight: 'normal', color: 'var(--text-muted)' }}>
+              ({winStats.ganadas}W / {winStats.perdidas}L)
+            </span>
+          </div>
+        </div>
+
+        {/* Max Drawdown */}
+        {maxDrawdown > 0 && (
+          <div className="summary-stat" style={{ gridColumn: '1 / -1' }}>
+            <div className="summary-stat__label" style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>Distancia al Stop-Loss (Max Drawdown: -{maxDrawdown} ARS)</span>
+              <span>{drawdownPct.toFixed(1)}%</span>
+            </div>
+            <div style={{ 
+              height: '8px', 
+              width: '100%', 
+              background: 'var(--bg-primary)', 
+              borderRadius: '4px', 
+              marginTop: '0.5rem',
+              overflow: 'hidden'
+            }}>
+              <div style={{ 
+                height: '100%', 
+                width: `${drawdownPct}%`, 
+                background: drawdownPct > 80 ? 'var(--color-loss)' : drawdownPct > 50 ? 'var(--color-warning)' : 'var(--color-profit)',
+                transition: 'width 0.3s ease, background 0.3s ease'
+              }} />
+            </div>
+          </div>
+        )}
+
+      </div>
+      
+      {/* Secondary Stats */}
+      <div className="summary-stats" style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
         <div className="summary-stat">
           <div className="summary-stat__label">Posiciones</div>
           <div className="summary-stat__value">{s.n_posiciones}</div>

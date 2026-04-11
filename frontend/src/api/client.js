@@ -34,6 +34,7 @@ export const api = {
   pauseStrategy: (id) => request(`/strategies/${id}/pause`, { method: 'POST' }),
   stopStrategy: (id) => request(`/strategies/${id}/stop`, { method: 'POST' }),
   getStrategyLogs: (id, limit = 50) => request(`/strategies/${id}/logs?limit=${limit}`),
+  configureAI: (data) => request('/ai/configure', { method: 'POST', body: JSON.stringify(data) }),
 };
 
 // ─── WebSocket Hook ─────────────────────────────────────────────────────────

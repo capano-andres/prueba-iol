@@ -19,10 +19,11 @@ from dotenv import load_dotenv
 
 from iol_client import IOLClient
 from market_data import MarketDataFeed, MarketSnapshot
-from math_engine import DEFAULT_RISK_FREE_RATE, enrich_snapshot
+from math_engine import DEFAULT_RISK_FREE_RATE, enrich_snapshot, bsm_greeks
 from oms import OMS, IOLProfile, PositionStatus
 from strategy import Strategy, StrategyConfig
 from strategy_bull_spread import BullCallSpreadStrategy, BullSpreadConfig
+from strategy_long_directional import LongDirectionalStrategy, LongDirectionalConfig
 import db
 
 logger = logging.getLogger(__name__)
@@ -35,16 +36,16 @@ STRATEGY_TYPES = {
         "nombre": "Options Mispricing (BSM)",
         "descripcion": "Provisión de liquidez pasiva. Detecta diferencias entre precio de mercado e IV teórica BSM.",
         "params": [
-            {"key": "min_mispricing_pct", "label": "Min Mispricing %", "type": "float", "default": 0.05},
-            {"key": "min_spread_pct",     "label": "Min Spread %",     "type": "float", "default": 0.02},
-            {"key": "max_spread_pct",     "label": "Max Spread %",     "type": "float", "default": 0.30},
-            {"key": "min_dte",            "label": "Min DTE",          "type": "int",   "default": 5},
-            {"key": "max_dte",            "label": "Max DTE",          "type": "int",   "default": 45},
-            {"key": "min_delta_abs",      "label": "Min |Delta|",      "type": "float", "default": 0.15},
-            {"key": "max_delta_abs",      "label": "Max |Delta|",      "type": "float", "default": 0.85},
-            {"key": "lote_base",          "label": "Lote Base",        "type": "int",   "default": 1},
-            {"key": "max_posiciones_abiertas", "label": "Max Posiciones", "type": "int", "default": 5},
-            {"key": "max_drawdown_ars",   "label": "Max Drawdown (Global Stop Loss ARS)", "type": "int", "default": 0},
+            {"key": "min_mispricing_pct", "label": "Min Mispricing %", "type": "float", "default": 0.05, "descripcion": "Porcentaje mínimo de desviación vs precio teórico (Black-Scholes) para que el bot considere operar."},
+            {"key": "min_spread_pct",     "label": "Min Spread %",     "type": "float", "default": 0.02, "descripcion": "Spread (compra-venta) mínimo requerido en mercado para proveer liquidez."},
+            {"key": "max_spread_pct",     "label": "Max Spread %",     "type": "float", "default": 0.30, "descripcion": "Límite donde la opción es tan ilíquida que el bot evita meterse para no quedar atrapado."},
+            {"key": "min_dte",            "label": "Min DTE",          "type": "int",   "default": 5, "descripcion": "Días mínimos al vencimiento. Evita operar la última semana por la volatilidad exponencial (Gamma)."},
+            {"key": "max_dte",            "label": "Max DTE",          "type": "int",   "default": 45, "descripcion": "Días máximos al vencimiento para buscar liquidez de corto/mediano plazo."},
+            {"key": "min_delta_abs",      "label": "Min |Delta|",      "type": "float", "default": 0.15, "descripcion": "Evita comprar opciones tan alejadas del precio que nunca varían (Muy OTM)."},
+            {"key": "max_delta_abs",      "label": "Max |Delta|",      "type": "float", "default": 0.85, "descripcion": "Evita comprar opciones casi aseguradas que son muy caras (Deep ITM)."},
+            {"key": "lote_base",          "label": "Lote Base",        "type": "int",   "default": 1, "descripcion": "Cantidad a comprar en cada orden disparada."},
+            {"key": "max_posiciones_abiertas", "label": "Max Posiciones", "type": "int", "default": 5, "descripcion": "Límite absoluto de contratos concurrentes armados por esta estrategia."},
+            {"key": "max_drawdown_ars",   "label": "Max Drawdown (Global Stop Loss ARS)", "type": "int", "default": 0, "descripcion": "Tope máximo de pérdida tolerada (ARS). Si el portafolio baja de este saldo desde el pico, se auto-liquida todo."},
         ],
     },
     "bull_call_spread": {
@@ -55,20 +56,42 @@ STRATEGY_TYPES = {
             "(100% bonificación IOL). Basado en análisis cuantitativo COME/GGAL Abril 2026."
         ),
         "params": [
-            {"key": "strike_width_pct",     "label": "Ancho Spread %",         "type": "float", "default": 0.12},
-            {"key": "atm_offset_pct",       "label": "Offset ATM %",           "type": "float", "default": 0.00},
-            {"key": "max_net_premium_pct",  "label": "Max Prima Neta %",       "type": "float", "default": 0.08},
-            {"key": "min_dte",              "label": "Min DTE",                "type": "int",   "default": 10},
-            {"key": "max_dte",              "label": "Max DTE",                "type": "int",   "default": 75},
-            {"key": "min_spread_pct",       "label": "Min Spread Bid-Ask",     "type": "float", "default": 0.01},
-            {"key": "max_spread_pct",       "label": "Max Spread Bid-Ask",     "type": "float", "default": 0.25},
-            {"key": "lotes_por_spread",     "label": "Lotes x Spread",         "type": "int",   "default": 1},
-            {"key": "max_spreads_abiertos", "label": "Max Spreads Simultáneos","type": "int",   "default": 3},
-            {"key": "stop_loss_pct",        "label": "Stop Loss (Por Spread) %", "type": "float", "default": 0.80},
-            {"key": "take_profit_pct",      "label": "Take Profit (Por Spread) %", "type": "float", "default": 0.65},
-            {"key": "min_reward_risk_ratio","label": "Min Reward/Risk",        "type": "float", "default": 0.80},
-            {"key": "force_intraday_close", "label": "Cierre Intradiario",     "type": "bool",  "default": False},
-            {"key": "max_drawdown_ars",     "label": "Stop Loss Global (Global Max Drawdown ARS)", "type": "int", "default": 0},
+            {"key": "strike_width_pct",     "label": "Ancho Spread %",         "type": "float", "default": 0.12, "descripcion": "Distancia en % entre el Strike comprado (protección) y el Strike vendido (financiamiento)."},
+            {"key": "atm_offset_pct",       "label": "Offset ATM %",           "type": "float", "default": 0.00, "descripcion": "Desplazamiento del punto de partida. 0 es comprar en el precio actual exacto."},
+            {"key": "max_net_premium_pct",  "label": "Max Prima Neta %",       "type": "float", "default": 0.08, "descripcion": "Cuánto % del precio estás dispuesto a pagar como costo neto del armazón."},
+            {"key": "min_dte",              "label": "Min DTE",                "type": "int",   "default": 10, "descripcion": "Días mínimos al vencimiento. Evita Gamma Risk destructivo."},
+            {"key": "max_dte",              "label": "Max DTE",                "type": "int",   "default": 75, "descripcion": "Días tope al vencimiento."},
+            {"key": "min_spread_pct",       "label": "Min Spread Bid-Ask",     "type": "float", "default": 0.01, "descripcion": "Filtro anti cotizaciones estancadas en cero spread."},
+            {"key": "max_spread_pct",       "label": "Max Spread Bid-Ask",     "type": "float", "default": 0.25, "descripcion": "Spread máximo tolerado para no licuarnos en costos invisibles."},
+            {"key": "lotes_por_spread",     "label": "Lotes x Spread",         "type": "int",   "default": 1, "descripcion": "Cantidad de pares a conformar simultáneamente."},
+            {"key": "max_spreads_abiertos", "label": "Max Spreads Simultáneos","type": "int",   "default": 3, "descripcion": "Cupo total de armazones permitidos en vivo a la vez."},
+            {"key": "stop_loss_pct",        "label": "Stop Loss (Por Spread) %", "type": "float", "default": 0.80, "descripcion": "Si el spread cae X% de lo que te costó armarlo, aborta posiciones."},
+            {"key": "take_profit_pct",      "label": "Take Profit (Por Spread) %", "type": "float", "default": 0.65, "descripcion": "Cuando la recompensa potencial recauda un X%, desarma todo y embolsa para evitar riesgo overnight."},
+            {"key": "min_reward_risk_ratio","label": "Min Reward/Risk",        "type": "float", "default": 0.80, "descripcion": "Relación entre riesgo de pérdida neta vs ganancia máxima. Rechaza trades matemáticamente absurdos."},
+            {"key": "force_intraday_close", "label": "Cierre Intradiario",     "type": "bool",  "default": False, "descripcion": "Intenta obligar liquidación intradiaria previo al corte del mercado."},
+            {"key": "max_drawdown_ars",     "label": "Stop Loss Global (Global Max Drawdown ARS)", "type": "int", "default": 0, "descripcion": "Tope máximo de pérdida tolerada global en pesos."},
+        ],
+    },
+    "long_directional": {
+        "nombre": "Direccional Puro (Solo Compras)",
+        "descripcion": (
+            "Compra opciones simple a favor de tu tendencia sin tocar márgenes "
+            "ni lanzar al descubierto. Ideal para buscar explosiones especulativas "
+            "comprando Calls o Puts y cuidándose solo con Stop Loss."
+        ),
+        "params": [
+            {"key": "sesgo",              "label": "Sesgo",              "type": "string",  "default": "CALL", "descripcion": "Aplica 'CALL' si crees que la acción subirá, o 'PUT' si consideras que entrará en caída."},
+            {"key": "target_delta_abs",   "label": "Target Delta |Δ|",   "type": "float",   "default": 0.50, "descripcion": "Configura qué tan agresiva será la opción. 0.50 es estándar (At The Money). Valores menores son baratos pero especulativos."},
+            {"key": "max_premium_pct",    "label": "Max Prima Pct %",    "type": "float",   "default": 0.10, "descripcion": "Porcentaje de máxima desviación contra el precio real permitido en el costo del contrato."},
+            {"key": "stop_loss_pct",      "label": "Stop Loss Pct %",    "type": "float",   "default": 0.35, "descripcion": "Declara liquidación si se pierde este porcentaje del capital original. (Ej. 0.35 quema al perder el 35%)."},
+            {"key": "take_profit_pct",    "label": "Take Profit Pct %",  "type": "float",   "default": 0.60, "descripcion": "Liquida satisfactoriamente la opción y saca ganancias manual si alcanza rentabilidad de este %. (Ej. 0.60 captura ganancia al subir 60%)."},
+            {"key": "min_dte",            "label": "Min DTE",            "type": "int",     "default": 7, "descripcion": "Días mínimos de protección de vencimiento. No pongas '0' excepto que asumas alto dolor de lotería semanal."},
+            {"key": "max_dte",            "label": "Max DTE",            "type": "int",     "default": 90, "descripcion": "Días tope al vencimiento."},
+            {"key": "max_spread_pct",     "label": "Max Spread bid-ask", "type": "float",   "default": 0.25, "descripcion": "Rechazar opciones fuertemente manipuladas con spreads anchos que drenan dinero de facto."},
+            {"key": "lotes_por_trade",    "label": "Lotes por Trade",    "type": "int",     "default": 1, "descripcion": "Cantidad a comprar en cada evento detonador de operación (multiplica por 100)."},
+            {"key": "max_posiciones_abiertas", "label": "Max Posiciones", "type": "int", "default": 2, "descripcion": "Aperturas simultáneas. Contiene frenesí algoritmico en compras."},
+            {"key": "force_intraday_close", "label": "Forzar Cierre Intradiario", "type": "bool", "default": False, "descripcion": "True obliga a desarmar sea como sea cuando tocan las 16:45, ahorrando noches en vilo."},
+            {"key": "max_drawdown_ars",   "label": "Stop Loss Total (ARS)", "type": "int", "default": 0, "descripcion": "Corta hemorragias si pierdes más de X cantidad de Pesos netamente en una jornada general."},
         ],
     },
 }
@@ -99,6 +122,7 @@ class StrategySlot:
     last_snapshot:     MarketSnapshot | None = field(default=None, repr=False)
     last_signals:      list = field(default_factory=list, repr=False)
     logs:              list = field(default_factory=list, repr=False)
+    win_stats:         dict = field(default_factory=lambda: {"total": 0, "ganadas": 0, "perdidas": 0, "win_rate": 0.0}, repr=False)
 
     def add_log(self, level: str, message: str) -> None:
         entry = {
@@ -115,16 +139,43 @@ class StrategySlot:
         oms = self._oms
         positions_open = []
         pnl_realizado = 0.0
+        pnl_no_realizado_total = 0.0
         nominal_en_uso = 0.0
+        net_delta = 0.0
+        net_vega = 0.0
+        spot = self.last_snapshot.spot if self.last_snapshot else None
 
         if oms:
             for p in oms.posiciones_abiertas():
                 mid = None
+                opt_quote = None
                 if self.last_snapshot:
                     for opt in self.last_snapshot.opciones:
-                        if opt.simbolo == p.simbolo and opt.mid:
+                        if opt.simbolo == p.simbolo:
                             mid = opt.mid
+                            opt_quote = opt
                             break
+                            
+                pnl_nr = p.pnl_no_realizado(mid) if mid else None
+                if pnl_nr is not None:
+                    pnl_no_realizado_total += pnl_nr
+
+                # Calcular Griegas Activas para esta posición
+                pos_delta = None
+                pos_vega = None
+                if opt_quote and spot and spot > 0:
+                    try:
+                        greeks = bsm_greeks(opt_quote, DEFAULT_RISK_FREE_RATE, spot=spot)
+                        if greeks and greeks.delta is not None and greeks.vega is not None:
+                            mult = 100 * p.cantidad
+                            sign = 1 if p.lado == "LONG" else -1
+                            pos_delta = greeks.delta * mult * sign
+                            pos_vega = greeks.vega * mult * sign
+                            net_delta += pos_delta
+                            net_vega += pos_vega
+                    except Exception:
+                        pass
+                
                 positions_open.append({
                     "id": p.id,
                     "simbolo": p.simbolo,
@@ -132,7 +183,7 @@ class StrategySlot:
                     "lado": p.lado,
                     "cantidad": p.cantidad,
                     "precio_apertura": p.precio_apertura,
-                    "pnl_no_realizado": p.pnl_no_realizado(mid) if mid else None,
+                    "pnl_no_realizado": pnl_nr,
                     "mid_actual": mid,
                 })
                 nominal_en_uso += p.precio_apertura * p.cantidad
@@ -151,10 +202,14 @@ class StrategySlot:
             "estado": self.estado,
             "created_at": self.created_at,
             "pnl_realizado": pnl_realizado,
+            "pnl_no_realizado_total": pnl_no_realizado_total,
+            "net_delta": net_delta,
+            "net_vega": net_vega,
+            "win_stats": self.win_stats,
             "posiciones_abiertas": positions_open,
             "n_posiciones": len(positions_open),
             "last_signals": self.last_signals[-5:],
-            "spot": self.last_snapshot.spot if self.last_snapshot else None,
+            "spot": spot,
         }
 
 
@@ -212,6 +267,7 @@ class TradingEngine:
                 estado="stopped",
                 created_at=s.get("created_at", ""),
             )
+            slot.win_stats = await db.get_win_rate_stats(slot.id)
             self._slots[slot.id] = slot
             logger.info("Slot cargado: %s (%s)", slot.nombre, slot.id)
 
@@ -382,6 +438,8 @@ class TradingEngine:
         if slot.estado == "running":
             return
 
+        slot.win_stats = await db.get_win_rate_stats(slot.id)
+
         if not self._client:
             raise RuntimeError("IOLClient no está conectado.")
 
@@ -418,6 +476,12 @@ class TradingEngine:
                 if k in BullSpreadConfig.__dataclass_fields__
             })
             strategy = BullCallSpreadStrategy(oms, bcs_cfg)
+        elif slot.tipo_estrategia == "long_directional":
+            ld_cfg = LongDirectionalConfig(**{
+                k: v for k, v in slot.config.items()
+                if k in LongDirectionalConfig.__dataclass_fields__
+            })
+            strategy = LongDirectionalStrategy(oms, ld_cfg)
         else:
             # default: options_mispricing
             cfg = StrategyConfig(**{

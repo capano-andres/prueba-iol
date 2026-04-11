@@ -14,6 +14,8 @@ export default function StrategyForm({ onClose, onCreated, strategyTypes }) {
     config: {},
   });
   const [loading, setLoading] = useState(false);
+  const [loadingAi, setLoadingAi] = useState(false);
+  const [aiAnalysis, setAiAnalysis] = useState(null);
   const [error, setError] = useState(null);
 
   // Cargar defaults del tipo seleccionado
@@ -59,6 +61,57 @@ export default function StrategyForm({ onClose, onCreated, strategyTypes }) {
       setLoading(false);
     }
   }
+
+  async function handleAskClaude() {
+    if (!form.activo) return;
+    setLoadingAi(true);
+    setError(null);
+    setAiAnalysis(null);
+    try {
+      const response = await api.configureAI({
+        activo: form.activo,
+        mercado: form.mercado,
+        tipo_estrategia: form.tipo_estrategia,
+        fondos_asignados: form.fondos_asignados || 0
+      });
+      // response comes as { analysis: "...", config: {...} }
+      if (response && response.config) {
+        setForm(prev => ({
+          ...prev,
+          config: { ...prev.config, ...response.config }
+        }));
+        setAiAnalysis(response.analysis);
+      }
+    } catch (err) {
+      setError("Error Claude IA: " + err.message);
+    } finally {
+      setLoadingAi(false);
+    }
+  }
+
+  const generateGeminiPrompt = () => {
+    if (!tipoInfo) return '';
+    const paramsList = tipoInfo.params.map((p, i) => `${i + 1}. "${p.key}" (${p.type}): ${p.descripcion || p.label}`).join('\n');
+    return `Actúa como un analista cuantitativo Quantamental especialista en la Bolsa Argentina (Merval / ByMA).
+
+TAREA PRINCIPAL:
+Necesito que utilices tus capacidades de Búsqueda Profunda (Deep Research) en la web para analizar en tiempo real la situación macroeconómica, técnica y fundamental del activo bursátil: ${form.activo || '[TICKER]'}.
+Busca noticias de hoy en portales como El Cronista, Ámbito e Infobae. Analiza las tasas de caución, la volatilidad implícita y la tendencia direccional.
+
+OBJETIVO:
+En base a tu investigación, configura los parámetros matemáticos de riesgo para mi bot algorítmico, operando la estrategia "${tipoInfo.nombre}". 
+Los fondos asignados para esta operación son: ${form.fondos_asignados || 0} ARS.
+
+LISTA DE PARÁMETROS A CONFIGURAR:
+${paramsList}
+
+FORMATO ESTRICTO DE SALIDA:
+Devuélveme tu respuesta ÚNICA Y EXCLUSIVAMENTE en formato JSON validado. Debe contener estas dos llaves:
+- "analysis": Un párrafo extenso citando OBLIGATORIAMENTE LAS FUENTES de periódicos financieros que usaste de base, tu diagnóstico del precio y tu elección de parámetros.
+- "config": Un objeto con la lista exacta de las variables provistas arriba con su valor recomendado.
+
+Asegúrate de que el JSON sea perfectamente válido sin texto markdown adicional.`;
+  };
 
   const tipoInfo = strategyTypes?.[form.tipo_estrategia];
 
@@ -181,6 +234,86 @@ export default function StrategyForm({ onClose, onCreated, strategyTypes }) {
               </div>
             </div>
 
+            {/* Claude AI Analysis Panel */}
+            <div className="form-group" style={{ 
+                marginTop: '1rem', 
+                padding: '1rem', 
+                background: 'linear-gradient(145deg, rgba(30,30,40,0.4) 0%, rgba(20,20,30,1) 100%)', 
+                border: '1px solid rgba(130, 80, 250, 0.4)', 
+                borderRadius: '8px' 
+              }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  🧠 Claude AI Autopilot
+                </span>
+                <button 
+                  type="button" 
+                  onClick={handleAskClaude} 
+                  disabled={loadingAi || !form.activo}
+                  style={{
+                    background: 'rgba(130, 80, 250, 0.2)',
+                    border: '1px solid rgba(130, 80, 250, 0.5)',
+                    color: '#d4b3ff',
+                    padding: '4px 12px',
+                    borderRadius: '4px',
+                    fontSize: '0.75rem',
+                    cursor: loadingAi ? 'not-allowed' : 'pointer',
+                    transition: 'all 0.2s',
+                  }}
+                  onMouseOver={(e) => {
+                    if (!loadingAi) e.currentTarget.style.background = 'rgba(130, 80, 250, 0.4)';
+                  }}
+                  onMouseOut={(e) => {
+                    if (!loadingAi) e.currentTarget.style.background = 'rgba(130, 80, 250, 0.2)';
+                  }}
+                >
+                  {loadingAi ? '⏳ Analizando Merval...' : '⚡ Pre-configurar usando IA'}
+                </button>
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                {aiAnalysis ? (
+                  <div style={{ color: '#e2d3f7', fontStyle: 'italic', lineHeight: '1.4' }}>
+                    "{aiAnalysis}"
+                  </div>
+                ) : (
+                  "Consulta a la IA para analizar el activo, proyectar macroeconomía local y autocompletar la configuración inferior bajo un riesgo calibrado."
+                )}
+              </div>
+            </div>
+
+            {/* Gemini Prompt Generator */}
+            {tipoInfo && (
+                <div className="form-group" style={{ 
+                  marginTop: '0.5rem', 
+                  padding: '1rem', 
+                  background: 'rgba(25, 25, 35, 0.6)', 
+                  border: '1px dashed rgba(100, 150, 255, 0.4)', 
+                  borderRadius: '8px' 
+                }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                  <span style={{ fontSize: '0.80rem', fontWeight: 600, color: '#88bcff' }}>
+                    ✨ Gemini Deep Research (Manual)
+                  </span>
+                  <button 
+                    type="button" 
+                    onClick={() => {
+                      navigator.clipboard.writeText(generateGeminiPrompt());
+                      alert('Prompt copiado al portapapeles. ¡Pégalo en Gemini y usá el modo "Pensar Profundamente"!');
+                    }}
+                    style={{
+                      background: 'rgba(100, 150, 255, 0.2)', border: '1px solid rgba(100, 150, 255, 0.5)',
+                      color: '#aaccff', padding: '4px 10px', borderRadius: '4px', fontSize: '0.7rem', cursor: 'pointer'
+                    }}
+                  >
+                    📋 Copiar Prompt
+                  </button>
+                </div>
+                <div style={{ fontSize: '0.70rem', color: 'var(--text-muted)' }}>
+                  ¿Optarías por usar Deep Research en Google Gemini en vez del Autopilot interno? Seleccioná tu estrategia y tus fondos arriba, pulsá copiar este prompt auto-generado, y volcá el JSON de Gemini abajo.
+                </div>
+              </div>
+            )}
+
             {/* Config params */}
             {tipoInfo && (
               <>
@@ -198,7 +331,19 @@ export default function StrategyForm({ onClose, onCreated, strategyTypes }) {
                 <div className="form-row" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
                   {tipoInfo.params.map(p => (
                     <div className="form-group" key={p.key}>
-                      <label className="form-label" htmlFor={`cfg-${p.key}`}>{p.label}</label>
+                      <label className="form-label" htmlFor={`cfg-${p.key}`} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        {p.label}
+                      </label>
+                      {p.descripcion && (
+                        <div style={{
+                          fontSize: '0.65rem',
+                          color: 'rgba(130, 80, 250, 0.8)',
+                          marginBottom: '0.4rem',
+                          lineHeight: '1.2'
+                        }}>
+                          {p.descripcion}
+                        </div>
+                      )}
                       {p.type === 'bool' ? (
                         <div className="toggle-container" style={{ marginTop: '0.35rem' }}>
                           <input
@@ -212,6 +357,14 @@ export default function StrategyForm({ onClose, onCreated, strategyTypes }) {
                             {form.config[p.key] ?? p.default ? 'Activado' : 'Desactivado'}
                           </span>
                         </div>
+                      ) : p.type === 'string' ? (
+                        <input
+                          className="form-input"
+                          id={`cfg-${p.key}`}
+                          type="text"
+                          value={form.config[p.key] ?? p.default}
+                          onChange={(e) => handleConfigChange(p.key, e.target.value.toUpperCase(), p.type)}
+                        />
                       ) : (
                         <input
                           className="form-input"
