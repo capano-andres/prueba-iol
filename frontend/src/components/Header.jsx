@@ -18,12 +18,18 @@ export default function Header({ connected, status, page, onNavigate }) {
       </div>
 
       {onNavigate && (
-        <div className="app-header__nav" style={{ display: 'flex', gap: '1rem', flex: 1, marginLeft: '2rem' }}>
+        <div className="app-header__nav" style={{ display: 'flex', gap: '0.5rem', flex: 1, marginLeft: '2rem', flexWrap: 'wrap' }}>
           <button 
             className={`btn btn--sm ${page === 'dashboard' || page === 'detail' ? 'btn--primary' : 'btn--ghost'}`} 
             onClick={() => onNavigate('dashboard')}
           >
             📊 Estrategias
+          </button>
+          <button 
+            className={`btn btn--sm ${page === 'trading' ? 'btn--primary' : 'btn--ghost'}`} 
+            onClick={() => onNavigate('trading')}
+          >
+            📈 Trading
           </button>
           <button 
             className={`btn btn--sm ${page === 'portfolio' ? 'btn--primary' : 'btn--ghost'}`} 

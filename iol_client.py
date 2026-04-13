@@ -191,36 +191,48 @@ class IOLClient:
     ) -> Any:
         """
         Ejecuta una petición HTTP con Exponential Backoff with Jitter
-        ante respuestas HTTP 429 (Too Many Requests).
+        ante respuestas HTTP 429 (Too Many Requests), 502/503/504 o errores de red.
         """
+        import aiohttp
         for attempt, (min_ms, max_ms) in enumerate(BACKOFF_RANGES, start=1):
             headers = {**self._auth_headers(), **kwargs.pop("headers", {})}
-            async with self._session.request(
-                method, url, headers=headers, **kwargs
-            ) as resp:
-                if resp.status == 429:
-                    # Respetar Retry-After si viene en la respuesta
-                    retry_after = resp.headers.get("Retry-After")
-                    if retry_after:
-                        delay = float(retry_after)
-                    else:
-                        delay = random.randint(min_ms, max_ms) / 1000.0
-                    logger.warning(
-                        "HTTP 429 – intento %d/%d. Esperando %.2f s…",
-                        attempt,
-                        MAX_RETRIES,
-                        delay,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
+            try:
+                async with self._session.request(
+                    method, url, headers=headers, **kwargs
+                ) as resp:
+                    if resp.status == 429 or resp.status >= 500:
+                        # Respetar Retry-After si viene en la respuesta o error de servidor
+                        retry_after = resp.headers.get("Retry-After")
+                        if retry_after and resp.status == 429:
+                            delay = float(retry_after)
+                        else:
+                            delay = random.randint(min_ms, max_ms) / 1000.0
+                        logger.warning(
+                            "HTTP %d – intento %d/%d. Esperando %.2f s…",
+                            resp.status,
+                            attempt,
+                            MAX_RETRIES,
+                            delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
 
-                if resp.status >= 400:
-                    body = await resp.text()
-                    raise IOLRequestError(
-                        f"HTTP {resp.status} en {url}: {body}"
-                    )
+                    if resp.status >= 400:
+                        body = await resp.text()
+                        raise IOLRequestError(
+                            f"HTTP {resp.status} en {url}: {body}"
+                        )
 
-                return await resp.json(content_type=None)
+                    return await resp.json(content_type=None)
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                delay = random.randint(min_ms, max_ms) / 1000.0
+                logger.warning(
+                    "Network error (%s) – intento %d/%d. Esperando %.2f s…",
+                    type(exc).__name__, attempt, MAX_RETRIES, delay
+                )
+                if attempt == MAX_RETRIES:
+                    raise IOLRequestError(f"Error de red tras {MAX_RETRIES} reintentos: {str(exc)}")
+                await asyncio.sleep(delay)
 
         raise IOLRequestError(
             f"Se superaron {MAX_RETRIES} reintentos para {url}. Operación descartada."

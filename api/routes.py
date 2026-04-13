@@ -331,6 +331,80 @@ async def stop_strategy(slot_id: str) -> dict:
     return slot
 
 
+# ─── Trading Manual ──────────────────────────────────────────────────────────
+
+from pydantic import BaseModel
+
+class ManualQuoteRequest(BaseModel):
+    mercado: str = "bCBA"
+    simbolo: str
+
+class ManualOrderRequest(BaseModel):
+    mercado: str = "bCBA"
+    simbolo: str
+    operacion: str  # "compra" | "venta"
+    cantidad: int
+    precio: float
+    plazo: str = "t0"
+
+@router.post("/trading/quote")
+async def manual_get_quote(req: ManualQuoteRequest) -> dict:
+    """Cotización manual de cualquier instrumento."""
+    engine = get_engine()
+    try:
+        data = await engine._client.get_quote(req.mercado, req.simbolo)
+        return {"ok": True, "data": data}
+    except Exception as e:
+        raise HTTPException(400, f"Error al obtener cotización: {str(e)}")
+
+@router.post("/trading/order")
+async def manual_place_order(req: ManualOrderRequest) -> dict:
+    """Envía una orden manual al mercado."""
+    engine = get_engine()
+    try:
+        result = await engine._client.place_order(
+            mercado=req.mercado,
+            simbolo=req.simbolo,
+            operacion=req.operacion,
+            cantidad=req.cantidad,
+            precio=req.precio,
+            plazo=req.plazo,
+        )
+        return {"ok": True, "data": result}
+    except Exception as e:
+        raise HTTPException(400, f"Error al enviar orden: {str(e)}")
+
+@router.delete("/trading/order/{order_id}")
+async def manual_cancel_order(order_id: int) -> dict:
+    """Cancela una orden manual."""
+    engine = get_engine()
+    try:
+        result = await engine._client.cancel_order(order_id)
+        return {"ok": True, "data": result}
+    except Exception as e:
+        raise HTTPException(400, f"Error al cancelar orden: {str(e)}")
+
+@router.get("/trading/operations")
+async def manual_get_operations() -> dict:
+    """Obtiene las operaciones recientes."""
+    engine = get_engine()
+    try:
+        result = await engine._client.get_operations()
+        return {"ok": True, "data": result}
+    except Exception as e:
+        raise HTTPException(400, f"Error al obtener operaciones: {str(e)}")
+
+@router.get("/trading/panel/{instrumento}/{panel}")
+async def get_panel(instrumento: str, panel: str) -> dict:
+    """Panel de cotizaciones (acciones, bonos, opciones, cedears)."""
+    engine = get_engine()
+    try:
+        data = await engine._client.get_cotizaciones_panel(instrumento, panel, "argentina")
+        return {"ok": True, "data": data}
+    except Exception as e:
+        raise HTTPException(400, f"Error al obtener panel: {str(e)}")
+
+
 # ─── Logs ────────────────────────────────────────────────────────────────────
 
 @router.get("/strategies/{slot_id}/logs")

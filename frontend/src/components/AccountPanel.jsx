@@ -29,7 +29,16 @@ export default function AccountPanel() {
     };
   }, []);
 
-  if (loading) return null;
+  if (loading) {
+    return (
+      <div className="account-panel-container fade-in">
+        <div className="glass-panel" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+          <span className="spinner spinner--primary" style={{ marginRight: '0.75rem' }}></span>
+          Cargando datos de la cuenta...
+        </div>
+      </div>
+    );
+  }
 
   // IOL Estadísticas
   const cuentas = accountInfo?.cuentas || [];

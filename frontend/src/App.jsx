@@ -6,9 +6,10 @@ import AccountPanel from './components/AccountPanel';
 import Dashboard from './pages/Dashboard';
 import StrategyDetail from './pages/StrategyDetail';
 import Portfolio from './pages/Portfolio';
+import Trading from './pages/Trading';
 
 export default function App() {
-  const [page, setPage] = useState('dashboard');           // 'dashboard' | 'detail'
+  const [page, setPage] = useState('dashboard');           // 'dashboard' | 'detail' | 'portfolio' | 'trading'
   const [selectedId, setSelectedId] = useState(null);
   const [strategies, setStrategies] = useState([]);
   const [strategyTypes, setStrategyTypes] = useState({});
@@ -113,7 +114,9 @@ export default function App() {
       {connected && page !== 'portfolio' && <AccountPanel />}
 
       <main className="app-main">
-        {page === 'portfolio' ? (
+        {page === 'trading' ? (
+          <Trading />
+        ) : page === 'portfolio' ? (
           <Portfolio />
         ) : page === 'dashboard' ? (
           <Dashboard
@@ -126,6 +129,7 @@ export default function App() {
           <StrategyDetail
             strategyId={selectedId}
             strategy={selectedStrategy}
+            strategyTypes={strategyTypes}
             onBack={handleBack}
             onRefresh={fetchStrategies}
           />

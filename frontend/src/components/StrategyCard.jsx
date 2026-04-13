@@ -61,7 +61,7 @@ export default function StrategyCard({ strategy, onSelect, onRefresh }) {
           <div className="strategy-card__meta">
             <span className="strategy-card__tag tag--asset">{s.activo}</span>
             <span className="strategy-card__tag tag--type">
-              {s.tipo_estrategia === 'options_mispricing' ? 'BSM Mispricing' : s.tipo_estrategia}
+              {{'options_mispricing': 'BSM Mispricing', 'bull_call_spread': 'Bull Spread', 'long_directional': 'Direccional', 'daytrading_acciones': 'Daytrading'}[s.tipo_estrategia] || s.tipo_estrategia}
             </span>
             <span className={`strategy-card__tag ${s.dry_run ? 'tag--dry-run' : 'tag--live'}`}>
               {s.dry_run ? 'DRY-RUN' : '🔴 LIVE'}

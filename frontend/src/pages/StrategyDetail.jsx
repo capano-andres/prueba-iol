@@ -1,18 +1,42 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api/client';
 import PositionsTable from '../components/PositionsTable';
 import SignalsList from '../components/SignalsList';
 import LogViewer from '../components/LogViewer';
 
-export default function StrategyDetail({ strategyId, strategy, onBack, onRefresh }) {
+export default function StrategyDetail({ strategyId, strategy, strategyTypes, onBack, onRefresh }) {
   const [logs, setLogs] = useState([]);
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState({ config: {} });
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState(null);
 
-  useEffect(() => {
+  // Auto-refresh logs every 5s
+  const fetchLogs = useCallback(() => {
     if (!strategyId) return;
-    api.getStrategyLogs(strategyId, 100)
+    api.getStrategyLogs(strategyId, 200)
       .then(setLogs)
       .catch(console.error);
-  }, [strategyId, strategy?.estado]);
+  }, [strategyId]);
+
+  useEffect(() => {
+    fetchLogs();
+    const interval = setInterval(fetchLogs, 5000);
+    return () => clearInterval(interval);
+  }, [fetchLogs, strategy?.estado]);
+
+  // Initialize edit form when entering edit mode
+  useEffect(() => {
+    if (editing && strategy) {
+      setEditForm({
+        nombre: strategy.nombre || '',
+        fondos_asignados: strategy.fondos_asignados || 0,
+        dry_run: strategy.dry_run ?? true,
+        activo: strategy.activo || 'GGAL',
+        config: { ...(strategy.config || {}) },
+      });
+    }
+  }, [editing, strategy]);
 
   if (!strategy) {
     return (
@@ -35,11 +59,13 @@ export default function StrategyDetail({ strategyId, strategy, onBack, onRefresh
   const winStats = s.win_stats || { total: 0, ganadas: 0, perdidas: 0, win_rate: 0 };
   const maxDrawdown = s.config?.max_drawdown_ars || 0;
   
-  // Calcular % de drawdown consumido (solo si estamos perdiendo)
   let drawdownPct = 0;
   if (maxDrawdown > 0 && pnlTotal < 0) {
     drawdownPct = Math.min((Math.abs(pnlTotal) / maxDrawdown) * 100, 100);
   }
+
+  // Get strategy type info for param labels/types
+  const tipoInfo = strategyTypes?.[s.tipo_estrategia];
 
   async function handleStart() {
     try { await api.startStrategy(s.id); onRefresh?.(); }
@@ -53,6 +79,42 @@ export default function StrategyDetail({ strategyId, strategy, onBack, onRefresh
     if (!confirm('¿Detener esta estrategia?')) return;
     try { await api.stopStrategy(s.id); onRefresh?.(); }
     catch (err) { alert(`Error: ${err.message}`); }
+  }
+
+  // ── Edit handlers ──────────────────────────────────────────────────────
+
+  function handleEditChange(key, value) {
+    setEditForm(prev => ({ ...prev, [key]: value }));
+  }
+
+  function handleConfigChange(key, value, type) {
+    const parsed = type === 'bool'  ? Boolean(value)
+                 : type === 'float' ? parseFloat(value) || 0
+                 : type === 'int'   ? parseInt(value) || 0
+                 : value;
+    setEditForm(prev => ({
+      ...prev,
+      config: { ...prev.config, [key]: parsed },
+    }));
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    setEditError(null);
+    try {
+      await api.updateStrategy(s.id, editForm);
+      setEditing(false);
+      onRefresh?.();
+    } catch (err) {
+      setEditError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function handleCancelEdit() {
+    setEditing(false);
+    setEditError(null);
   }
 
   return (
@@ -124,10 +186,7 @@ export default function StrategyDetail({ strategyId, strategy, onBack, onRefresh
             </div>
             <div style={{ background: 'var(--bg-primary)', padding: '0.25rem 0.5rem', borderRadius: '4px' }}>
               <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginRight: '0.5rem' }}>ν Vega</span>
-              <span style={{ 
-                fontWeight: 'bold', 
-                color: 'var(--color-warning)'
-              }}>
+              <span style={{ fontWeight: 'bold', color: 'var(--color-warning)' }}>
                 {s.net_vega ? s.net_vega.toFixed(2) : '0.00'}
               </span>
             </div>
@@ -153,23 +212,17 @@ export default function StrategyDetail({ strategyId, strategy, onBack, onRefresh
               <span>{drawdownPct.toFixed(1)}%</span>
             </div>
             <div style={{ 
-              height: '8px', 
-              width: '100%', 
-              background: 'var(--bg-primary)', 
-              borderRadius: '4px', 
-              marginTop: '0.5rem',
-              overflow: 'hidden'
+              height: '8px', width: '100%', background: 'var(--bg-primary)', 
+              borderRadius: '4px', marginTop: '0.5rem', overflow: 'hidden'
             }}>
               <div style={{ 
-                height: '100%', 
-                width: `${drawdownPct}%`, 
+                height: '100%', width: `${drawdownPct}%`, 
                 background: drawdownPct > 80 ? 'var(--color-loss)' : drawdownPct > 50 ? 'var(--color-warning)' : 'var(--color-profit)',
                 transition: 'width 0.3s ease, background 0.3s ease'
               }} />
             </div>
           </div>
         )}
-
       </div>
       
       {/* Secondary Stats */}
@@ -181,9 +234,7 @@ export default function StrategyDetail({ strategyId, strategy, onBack, onRefresh
         <div className="summary-stat">
           <div className="summary-stat__label">Fondos Asignados</div>
           <div className="summary-stat__value">
-            {s.fondos_asignados > 0
-              ? `$${s.fondos_asignados.toLocaleString('es-AR')}`
-              : 'Sin límite'}
+            {s.fondos_asignados > 0 ? `$${s.fondos_asignados.toLocaleString('es-AR')}` : 'Sin límite'}
           </div>
         </div>
         <div className="summary-stat">
@@ -200,9 +251,8 @@ export default function StrategyDetail({ strategyId, strategy, onBack, onRefresh
         </div>
       </div>
 
-      {/* Two-column layout */}
+      {/* Two-column layout: Positions + Signals */}
       <div className="detail-grid">
-        {/* Left: Positions */}
         <div className="card">
           <div className="card__header">
             <span className="card__title">Posiciones Abiertas</span>
@@ -215,7 +265,6 @@ export default function StrategyDetail({ strategyId, strategy, onBack, onRefresh
           </div>
         </div>
 
-        {/* Right: Signals */}
         <div className="card">
           <div className="card__header">
             <span className="card__title">Últimas Señales</span>
@@ -229,51 +278,203 @@ export default function StrategyDetail({ strategyId, strategy, onBack, onRefresh
         </div>
       </div>
 
-      {/* Logs */}
+      {/* ── LOGS — Live feed ────────────────────────────────────────────── */}
       <div className="card" style={{ marginTop: '1.25rem' }}>
         <div className="card__header">
-          <span className="card__title">Logs</span>
-          <button className="btn btn--ghost btn--sm" onClick={() => {
-            api.getStrategyLogs(strategyId, 100).then(setLogs).catch(console.error);
-          }}>
-            🔄 Refrescar
-          </button>
+          <span className="card__title">📋 Logs en Vivo</span>
+          <div className="flex gap-2">
+            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', alignSelf: 'center' }}>
+              Auto-refresh 5s
+            </span>
+            <button className="btn btn--ghost btn--sm" onClick={fetchLogs}>
+              🔄 Refrescar
+            </button>
+          </div>
         </div>
         <div className="card__body">
           <LogViewer logs={logs.length > 0 ? logs : strategy?.logs || []} />
         </div>
       </div>
 
-      {/* Config */}
+      {/* ── CONFIGURACIÓN — Editable cuando está detenida ─────────────── */}
       <div className="card" style={{ marginTop: '1.25rem' }}>
         <div className="card__header">
-          <span className="card__title">Configuración</span>
+          <span className="card__title">⚙️ Configuración</span>
+          {s.estado === 'stopped' && !editing && (
+            <button className="btn btn--primary btn--sm" onClick={() => setEditing(true)}>
+              ✏️ Editar
+            </button>
+          )}
+          {editing && (
+            <div className="flex gap-2">
+              <button className="btn btn--ghost btn--sm" onClick={handleCancelEdit} disabled={saving}>
+                Cancelar
+              </button>
+              <button className="btn btn--success btn--sm" onClick={handleSave} disabled={saving}>
+                {saving ? <><span className="spinner spinner--sm" style={{ marginRight: '0.25rem' }}></span> Guardando...</> : '💾 Guardar'}
+              </button>
+            </div>
+          )}
+          {s.estado !== 'stopped' && !editing && (
+            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+              Detené la estrategia para editar
+            </span>
+          )}
         </div>
         <div className="card__body">
-          <div style={{
-            display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-            gap: '0.75rem'
-          }}>
-            {s.config && Object.entries(s.config).map(([key, val]) => (
-              <div key={key} style={{
-                background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)',
-                padding: '0.6rem 0.85rem'
-              }}>
-                <div style={{
-                  fontSize: '0.65rem', color: 'var(--text-muted)',
-                  textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.2rem'
-                }}>
-                  {key.replace(/_/g, ' ')}
+          {editError && (
+            <div style={{
+              padding: '0.75rem 1rem', marginBottom: '1rem',
+              background: 'var(--color-loss-dim)', border: '1px solid rgba(255,59,92,0.3)',
+              borderRadius: 'var(--radius-md)', color: 'var(--color-loss)', fontSize: '0.85rem'
+            }}>
+              {editError}
+            </div>
+          )}
+
+          {editing ? (
+            /* ── Modo edición ──────────────────────────────────────── */
+            <div>
+              {/* Campos principales */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+                <div className="form-group">
+                  <label className="form-label">Nombre</label>
+                  <input
+                    className="form-input"
+                    value={editForm.nombre}
+                    onChange={(e) => handleEditChange('nombre', e.target.value)}
+                  />
                 </div>
-                <div style={{
-                  fontSize: '0.9rem', fontWeight: 600,
-                  fontFamily: 'var(--font-mono)', color: 'var(--text-primary)'
-                }}>
-                  {typeof val === 'number' ? val.toLocaleString() : String(val)}
+                <div className="form-group">
+                  <label className="form-label">Activo</label>
+                  <input
+                    className="form-input"
+                    value={editForm.activo}
+                    onChange={(e) => handleEditChange('activo', e.target.value.toUpperCase())}
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Fondos Asignados (ARS)</label>
+                  <input
+                    className="form-input"
+                    type="number"
+                    min="0"
+                    step="1000"
+                    value={editForm.fondos_asignados || ''}
+                    onChange={(e) => handleEditChange('fondos_asignados', parseFloat(e.target.value) || 0)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Modo</label>
+                  <div className="toggle-container" style={{ marginTop: '0.35rem' }}>
+                    <input
+                      type="checkbox"
+                      className="toggle"
+                      checked={!editForm.dry_run}
+                      onChange={(e) => {
+                        if (e.target.checked && !confirm('⚠️ LIVE enviará órdenes reales. ¿Seguro?')) return;
+                        handleEditChange('dry_run', !e.target.checked);
+                      }}
+                    />
+                    <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>
+                      {editForm.dry_run ? '🧪 DRY-RUN' : '🔴 LIVE'}
+                    </span>
+                  </div>
                 </div>
               </div>
-            ))}
-          </div>
+
+              {/* Parámetros de estrategia */}
+              {tipoInfo && (
+                <>
+                  <div style={{
+                    fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)',
+                    textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.75rem',
+                    paddingTop: '1rem', borderTop: '1px solid var(--border-color)'
+                  }}>
+                    Parámetros — {tipoInfo.nombre}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem' }}>
+                    {tipoInfo.params.map(p => (
+                      <div className="form-group" key={p.key}>
+                        <label className="form-label" htmlFor={`edit-${p.key}`}>{p.label}</label>
+                        {p.descripcion && (
+                          <div style={{
+                            fontSize: '0.65rem', color: 'rgba(130, 80, 250, 0.8)',
+                            marginBottom: '0.4rem', lineHeight: '1.2'
+                          }}>
+                            {p.descripcion}
+                          </div>
+                        )}
+                        {p.type === 'bool' ? (
+                          <div className="toggle-container" style={{ marginTop: '0.35rem' }}>
+                            <input
+                              type="checkbox"
+                              className="toggle"
+                              id={`edit-${p.key}`}
+                              checked={!!(editForm.config[p.key] ?? p.default)}
+                              onChange={(e) => handleConfigChange(p.key, e.target.checked, 'bool')}
+                            />
+                            <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>
+                              {editForm.config[p.key] ?? p.default ? 'Activado' : 'Desactivado'}
+                            </span>
+                          </div>
+                        ) : p.type === 'string' ? (
+                          <input
+                            className="form-input"
+                            id={`edit-${p.key}`}
+                            type="text"
+                            value={editForm.config[p.key] ?? p.default}
+                            onChange={(e) => handleConfigChange(p.key, e.target.value.toUpperCase(), p.type)}
+                          />
+                        ) : (
+                          <input
+                            className="form-input"
+                            id={`edit-${p.key}`}
+                            type="number"
+                            step={p.type === 'float' ? '0.01' : '1'}
+                            value={editForm.config[p.key] ?? p.default}
+                            onChange={(e) => handleConfigChange(p.key, e.target.value, p.type)}
+                          />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            /* ── Modo vista (read-only) ────────────────────────────── */
+            <div style={{
+              display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+              gap: '0.75rem'
+            }}>
+              {s.config && Object.entries(s.config).map(([key, val]) => {
+                // Find the param info for better labels
+                const paramInfo = tipoInfo?.params?.find(p => p.key === key);
+                return (
+                  <div key={key} style={{
+                    background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)',
+                    padding: '0.6rem 0.85rem'
+                  }}>
+                    <div style={{
+                      fontSize: '0.65rem', color: 'var(--text-muted)',
+                      textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.2rem'
+                    }}>
+                      {paramInfo?.label || key.replace(/_/g, ' ')}
+                    </div>
+                    <div style={{
+                      fontSize: '0.9rem', fontWeight: 600,
+                      fontFamily: 'var(--font-mono)', color: 'var(--text-primary)'
+                    }}>
+                      {typeof val === 'boolean' ? (val ? '✅ Sí' : '❌ No')
+                       : typeof val === 'number' ? val.toLocaleString()
+                       : String(val)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>

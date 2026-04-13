@@ -35,6 +35,12 @@ export const api = {
   stopStrategy: (id) => request(`/strategies/${id}/stop`, { method: 'POST' }),
   getStrategyLogs: (id, limit = 50) => request(`/strategies/${id}/logs?limit=${limit}`),
   configureAI: (data) => request('/ai/configure', { method: 'POST', body: JSON.stringify(data) }),
+  // Trading manual
+  getQuote: (mercado, simbolo) => request('/trading/quote', { method: 'POST', body: JSON.stringify({ mercado, simbolo }) }),
+  placeOrder: (data) => request('/trading/order', { method: 'POST', body: JSON.stringify(data) }),
+  cancelOrder: (orderId) => request(`/trading/order/${orderId}`, { method: 'DELETE' }),
+  getTradingOperations: () => request('/trading/operations'),
+  getPanel: (instrumento, panel) => request(`/trading/panel/${instrumento}/${panel}`),
 };
 
 // ─── WebSocket Hook ─────────────────────────────────────────────────────────

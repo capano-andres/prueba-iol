@@ -24,6 +24,7 @@ from oms import OMS, IOLProfile, PositionStatus
 from strategy import Strategy, StrategyConfig
 from strategy_bull_spread import BullCallSpreadStrategy, BullSpreadConfig
 from strategy_long_directional import LongDirectionalStrategy, LongDirectionalConfig
+from strategy_daytrading import DaytradingStrategy, DaytradingConfig
 import db
 
 logger = logging.getLogger(__name__)
@@ -36,62 +37,87 @@ STRATEGY_TYPES = {
         "nombre": "Options Mispricing (BSM)",
         "descripcion": "Provisión de liquidez pasiva. Detecta diferencias entre precio de mercado e IV teórica BSM.",
         "params": [
-            {"key": "min_mispricing_pct", "label": "Min Mispricing %", "type": "float", "default": 0.05, "descripcion": "Porcentaje mínimo de desviación vs precio teórico (Black-Scholes) para que el bot considere operar."},
-            {"key": "min_spread_pct",     "label": "Min Spread %",     "type": "float", "default": 0.02, "descripcion": "Spread (compra-venta) mínimo requerido en mercado para proveer liquidez."},
-            {"key": "max_spread_pct",     "label": "Max Spread %",     "type": "float", "default": 0.30, "descripcion": "Límite donde la opción es tan ilíquida que el bot evita meterse para no quedar atrapado."},
-            {"key": "min_dte",            "label": "Min DTE",          "type": "int",   "default": 5, "descripcion": "Días mínimos al vencimiento. Evita operar la última semana por la volatilidad exponencial (Gamma)."},
-            {"key": "max_dte",            "label": "Max DTE",          "type": "int",   "default": 45, "descripcion": "Días máximos al vencimiento para buscar liquidez de corto/mediano plazo."},
-            {"key": "min_delta_abs",      "label": "Min |Delta|",      "type": "float", "default": 0.15, "descripcion": "Evita comprar opciones tan alejadas del precio que nunca varían (Muy OTM)."},
-            {"key": "max_delta_abs",      "label": "Max |Delta|",      "type": "float", "default": 0.85, "descripcion": "Evita comprar opciones casi aseguradas que son muy caras (Deep ITM)."},
-            {"key": "lote_base",          "label": "Lote Base",        "type": "int",   "default": 1, "descripcion": "Cantidad a comprar en cada orden disparada."},
-            {"key": "max_posiciones_abiertas", "label": "Max Posiciones", "type": "int", "default": 5, "descripcion": "Límite absoluto de contratos concurrentes armados por esta estrategia."},
-            {"key": "max_drawdown_ars",   "label": "Max Drawdown (Global Stop Loss ARS)", "type": "int", "default": 0, "descripcion": "Tope máximo de pérdida tolerada (ARS). Si el portafolio baja de este saldo desde el pico, se auto-liquida todo."},
+            {"key": "min_mispricing_pct", "label": "Min Mispricing %", "type": "float", "default": 0.05, "descripcion": "Desviación mínima vs precio teórico BSM para operar. Ejemplo: 0.05 = 5%, 0.10 = 10%."},
+            {"key": "min_spread_pct",     "label": "Min Spread %",     "type": "float", "default": 0.02, "descripcion": "Spread compra-venta mínimo requerido. Ejemplo: 0.02 = 2%, 0.05 = 5%."},
+            {"key": "max_spread_pct",     "label": "Max Spread %",     "type": "float", "default": 0.30, "descripcion": "Spread máximo tolerable (opciones muy ilíquidas). Ejemplo: 0.30 = 30%."},
+            {"key": "min_dte",            "label": "Min DTE",          "type": "int",   "default": 5, "descripcion": "Días mínimos al vencimiento. Evita la última semana por Gamma explosivo."},
+            {"key": "max_dte",            "label": "Max DTE",          "type": "int",   "default": 45, "descripcion": "Días máximos al vencimiento."},
+            {"key": "min_delta_abs",      "label": "Min |Delta|",      "type": "float", "default": 0.15, "descripcion": "Delta mínimo absoluto. Filtra opciones muy OTM que no se mueven. Ejemplo: 0.15 = delta 15."},
+            {"key": "max_delta_abs",      "label": "Max |Delta|",      "type": "float", "default": 0.85, "descripcion": "Delta máximo absoluto. Evita opciones Deep ITM muy caras. Ejemplo: 0.85 = delta 85."},
+            {"key": "lote_base",          "label": "Lote Base",        "type": "int",   "default": 1, "descripcion": "Cantidad de contratos a comprar por orden."},
+            {"key": "max_posiciones_abiertas", "label": "Max Posiciones", "type": "int", "default": 5, "descripcion": "Contratos concurrentes máximos abiertos."},
+            {"key": "max_drawdown_ars",   "label": "Max Drawdown (ARS)", "type": "int", "default": 0, "descripcion": "Pérdida máxima en pesos antes de auto-liquidar todo. 0 = sin límite."},
         ],
     },
     "bull_call_spread": {
         "nombre": "Bull Call Spread Direccional",
         "descripcion": (
             "Spread vertical alcista: compra Call ATM + venta Call OTM del mismo vencimiento. "
-            "Mitiga Theta y Vega respecto al Long Call puro. Optimizado para cierre intradiario "
-            "(100% bonificación IOL). Basado en análisis cuantitativo COME/GGAL Abril 2026."
+            "Mitiga Theta y Vega respecto al Long Call puro. Optimizado para cierre intradiario."
         ),
         "params": [
-            {"key": "strike_width_pct",     "label": "Ancho Spread %",         "type": "float", "default": 0.12, "descripcion": "Distancia en % entre el Strike comprado (protección) y el Strike vendido (financiamiento)."},
-            {"key": "atm_offset_pct",       "label": "Offset ATM %",           "type": "float", "default": 0.00, "descripcion": "Desplazamiento del punto de partida. 0 es comprar en el precio actual exacto."},
-            {"key": "max_net_premium_pct",  "label": "Max Prima Neta %",       "type": "float", "default": 0.08, "descripcion": "Cuánto % del precio estás dispuesto a pagar como costo neto del armazón."},
-            {"key": "min_dte",              "label": "Min DTE",                "type": "int",   "default": 10, "descripcion": "Días mínimos al vencimiento. Evita Gamma Risk destructivo."},
-            {"key": "max_dte",              "label": "Max DTE",                "type": "int",   "default": 75, "descripcion": "Días tope al vencimiento."},
-            {"key": "min_spread_pct",       "label": "Min Spread Bid-Ask",     "type": "float", "default": 0.01, "descripcion": "Filtro anti cotizaciones estancadas en cero spread."},
-            {"key": "max_spread_pct",       "label": "Max Spread Bid-Ask",     "type": "float", "default": 0.25, "descripcion": "Spread máximo tolerado para no licuarnos en costos invisibles."},
-            {"key": "lotes_por_spread",     "label": "Lotes x Spread",         "type": "int",   "default": 1, "descripcion": "Cantidad de pares a conformar simultáneamente."},
-            {"key": "max_spreads_abiertos", "label": "Max Spreads Simultáneos","type": "int",   "default": 3, "descripcion": "Cupo total de armazones permitidos en vivo a la vez."},
-            {"key": "stop_loss_pct",        "label": "Stop Loss (Por Spread) %", "type": "float", "default": 0.80, "descripcion": "Si el spread cae X% de lo que te costó armarlo, aborta posiciones."},
-            {"key": "take_profit_pct",      "label": "Take Profit (Por Spread) %", "type": "float", "default": 0.65, "descripcion": "Cuando la recompensa potencial recauda un X%, desarma todo y embolsa para evitar riesgo overnight."},
-            {"key": "min_reward_risk_ratio","label": "Min Reward/Risk",        "type": "float", "default": 0.80, "descripcion": "Relación entre riesgo de pérdida neta vs ganancia máxima. Rechaza trades matemáticamente absurdos."},
-            {"key": "force_intraday_close", "label": "Cierre Intradiario",     "type": "bool",  "default": False, "descripcion": "Intenta obligar liquidación intradiaria previo al corte del mercado."},
-            {"key": "max_drawdown_ars",     "label": "Stop Loss Global (Global Max Drawdown ARS)", "type": "int", "default": 0, "descripcion": "Tope máximo de pérdida tolerada global en pesos."},
+            {"key": "strike_width_pct",     "label": "Ancho Spread %",         "type": "float", "default": 0.12, "descripcion": "Distancia entre strikes. Ejemplo: 0.12 = 12% entre el comprado y el vendido."},
+            {"key": "atm_offset_pct",       "label": "Offset ATM %",           "type": "float", "default": 0.00, "descripcion": "Desplazamiento del punto de partida. 0 = comprar justo At The Money."},
+            {"key": "max_net_premium_pct",  "label": "Max Prima Neta %",       "type": "float", "default": 0.08, "descripcion": "Costo máximo del spread como % del spot. Ejemplo: 0.08 = 8% del precio."},
+            {"key": "min_dte",              "label": "Min DTE",                "type": "int",   "default": 10, "descripcion": "Días mínimos al vencimiento."},
+            {"key": "max_dte",              "label": "Max DTE",                "type": "int",   "default": 75, "descripcion": "Días máximos al vencimiento."},
+            {"key": "min_spread_pct",       "label": "Min Spread Bid-Ask",     "type": "float", "default": 0.01, "descripcion": "Spread bid-ask mínimo. Ejemplo: 0.01 = 1%. Filtra cotizaciones estancadas."},
+            {"key": "max_spread_pct",       "label": "Max Spread Bid-Ask",     "type": "float", "default": 0.25, "descripcion": "Spread bid-ask máximo tolerable. Ejemplo: 0.25 = 25%."},
+            {"key": "lotes_por_spread",     "label": "Lotes x Spread",         "type": "int",   "default": 1, "descripcion": "Pares de contratos por operación."},
+            {"key": "max_spreads_abiertos", "label": "Max Spreads Simultáneos","type": "int",   "default": 3, "descripcion": "Máximo de spreads abiertos al mismo tiempo."},
+            {"key": "stop_loss_pct",        "label": "Stop Loss %",            "type": "float", "default": 0.80, "descripcion": "Cerrar si la prima neta cae este %. Ejemplo: 0.80 = -80% de lo pagado."},
+            {"key": "take_profit_pct",      "label": "Take Profit %",          "type": "float", "default": 0.65, "descripcion": "Cerrar si la ganancia alcanza este %. Ejemplo: 0.65 = +65% de ganancia."},
+            {"key": "min_reward_risk_ratio","label": "Min Reward/Risk",        "type": "float", "default": 0.80, "descripcion": "Ratio mínimo ganancia/riesgo. Ejemplo: 0.80 = por cada $1 que arriesgás, ganás al menos $0.80."},
+            {"key": "force_intraday_close", "label": "Cierre Intradiario",     "type": "bool",  "default": False, "descripcion": "Cerrar todo a las 16:45 para bonificación IOL."},
+            {"key": "max_drawdown_ars",     "label": "Max Drawdown (ARS)",     "type": "int",   "default": 0, "descripcion": "Pérdida máxima en pesos antes de auto-liquidar. 0 = sin límite."},
         ],
     },
     "long_directional": {
         "nombre": "Direccional Puro (Solo Compras)",
         "descripcion": (
-            "Compra opciones simple a favor de tu tendencia sin tocar márgenes "
-            "ni lanzar al descubierto. Ideal para buscar explosiones especulativas "
-            "comprando Calls o Puts y cuidándose solo con Stop Loss."
+            "Compra opciones a favor de tu tendencia sin lanzar al descubierto. "
+            "Ideal para buscar explosiones especulativas con Stop Loss."
         ),
         "params": [
-            {"key": "sesgo",              "label": "Sesgo",              "type": "string",  "default": "CALL", "descripcion": "Aplica 'CALL' si crees que la acción subirá, o 'PUT' si consideras que entrará en caída."},
-            {"key": "target_delta_abs",   "label": "Target Delta |Δ|",   "type": "float",   "default": 0.50, "descripcion": "Configura qué tan agresiva será la opción. 0.50 es estándar (At The Money). Valores menores son baratos pero especulativos."},
-            {"key": "max_premium_pct",    "label": "Max Prima Pct %",    "type": "float",   "default": 0.10, "descripcion": "Porcentaje de máxima desviación contra el precio real permitido en el costo del contrato."},
-            {"key": "stop_loss_pct",      "label": "Stop Loss Pct %",    "type": "float",   "default": 0.35, "descripcion": "Declara liquidación si se pierde este porcentaje del capital original. (Ej. 0.35 quema al perder el 35%)."},
-            {"key": "take_profit_pct",    "label": "Take Profit Pct %",  "type": "float",   "default": 0.60, "descripcion": "Liquida satisfactoriamente la opción y saca ganancias manual si alcanza rentabilidad de este %. (Ej. 0.60 captura ganancia al subir 60%)."},
-            {"key": "min_dte",            "label": "Min DTE",            "type": "int",     "default": 7, "descripcion": "Días mínimos de protección de vencimiento. No pongas '0' excepto que asumas alto dolor de lotería semanal."},
-            {"key": "max_dte",            "label": "Max DTE",            "type": "int",     "default": 90, "descripcion": "Días tope al vencimiento."},
-            {"key": "max_spread_pct",     "label": "Max Spread bid-ask", "type": "float",   "default": 0.25, "descripcion": "Rechazar opciones fuertemente manipuladas con spreads anchos que drenan dinero de facto."},
-            {"key": "lotes_por_trade",    "label": "Lotes por Trade",    "type": "int",     "default": 1, "descripcion": "Cantidad a comprar en cada evento detonador de operación (multiplica por 100)."},
-            {"key": "max_posiciones_abiertas", "label": "Max Posiciones", "type": "int", "default": 2, "descripcion": "Aperturas simultáneas. Contiene frenesí algoritmico en compras."},
-            {"key": "force_intraday_close", "label": "Forzar Cierre Intradiario", "type": "bool", "default": False, "descripcion": "True obliga a desarmar sea como sea cuando tocan las 16:45, ahorrando noches en vilo."},
-            {"key": "max_drawdown_ars",   "label": "Stop Loss Total (ARS)", "type": "int", "default": 0, "descripcion": "Corta hemorragias si pierdes más de X cantidad de Pesos netamente en una jornada general."},
+            {"key": "sesgo",              "label": "Sesgo",              "type": "string",  "default": "CALL", "descripcion": "CALL si creés que sube, PUT si creés que baja."},
+            {"key": "target_delta_abs",   "label": "Target Delta |Δ|",   "type": "float",   "default": 0.50, "descripcion": "Delta objetivo. 0.50 = ATM (At The Money). Menor = más barato pero más especulativo."},
+            {"key": "max_premium_pct",    "label": "Max Prima %",        "type": "float",   "default": 0.10, "descripcion": "Costo máximo permitido como % del spot. Ejemplo: 0.10 = 10% del precio de la acción."},
+            {"key": "stop_loss_pct",      "label": "Stop Loss %",        "type": "float",   "default": 0.35, "descripcion": "Vender si la prima cae este %. Ejemplo: 0.35 = vender si pierde 35% de lo pagado."},
+            {"key": "take_profit_pct",    "label": "Take Profit %",      "type": "float",   "default": 0.60, "descripcion": "Vender si la prima sube este %. Ejemplo: 0.60 = tomar ganancia al +60%."},
+            {"key": "min_dte",            "label": "Min DTE",            "type": "int",     "default": 7, "descripcion": "Días mínimos al vencimiento."},
+            {"key": "max_dte",            "label": "Max DTE",            "type": "int",     "default": 90, "descripcion": "Días máximos al vencimiento."},
+            {"key": "max_spread_pct",     "label": "Max Spread Bid-Ask", "type": "float",   "default": 0.25, "descripcion": "Spread bid-ask máximo tolerable. Ejemplo: 0.25 = 25%."},
+            {"key": "lotes_por_trade",    "label": "Lotes por Trade",    "type": "int",     "default": 1, "descripcion": "Contratos a comprar por señal."},
+            {"key": "max_posiciones_abiertas", "label": "Max Posiciones", "type": "int", "default": 2, "descripcion": "Máximo de posiciones abiertas simultáneas."},
+            {"key": "force_intraday_close", "label": "Cierre Intradiario", "type": "bool", "default": False, "descripcion": "Cerrar todo a las 16:45 para bonificación IOL."},
+            {"key": "max_drawdown_ars",   "label": "Max Drawdown (ARS)", "type": "int", "default": 0, "descripcion": "Pérdida máxima en pesos antes de auto-liquidar. 0 = sin límite."},
+        ],
+    },
+    "daytrading_acciones": {
+        "nombre": "Daytrading Opciones (EMA + RSI)",
+        "descripcion": (
+            "Intradiario bidireccional sobre primas de opciones GGAL. "
+            "Compra CALLs en tendencia alcista (EMA golden cross) y "
+            "PUTs en tendencia bajista (EMA death cross). Solo compra opciones, "
+            "nunca lanza al descubierto. Tradea el valor de la prima."
+        ),
+        "params": [
+            {"key": "ema_rapida",         "label": "EMA Rápida",            "type": "int",   "default": 9,    "descripcion": "Períodos de la Media Móvil Exponencial rápida. Cada período = 1 snapshot (~30s)."},
+            {"key": "ema_lenta",          "label": "EMA Lenta",             "type": "int",   "default": 21,   "descripcion": "Períodos EMA lenta. Cuando la rápida la cruza hacia arriba = señal alcista, hacia abajo = bajista."},
+            {"key": "rsi_periodos",       "label": "RSI Períodos",          "type": "int",   "default": 14,   "descripcion": "Períodos para calcular el Índice de Fuerza Relativa (RSI)."},
+            {"key": "rsi_overbought",     "label": "RSI Sobrecompra",       "type": "int",   "default": 70,   "descripcion": "No comprar CALLs si RSI supera este nivel (mercado recalentado)."},
+            {"key": "rsi_oversold",       "label": "RSI Sobreventa",        "type": "int",   "default": 30,   "descripcion": "No comprar PUTs si RSI cae debajo de este nivel (mercado ya colapsado)."},
+            {"key": "target_delta",       "label": "Delta Objetivo",        "type": "float", "default": 0.50, "descripcion": "Delta absoluto para seleccionar opción. 0.50 = ATM (At The Money)."},
+            {"key": "min_dte",            "label": "Min DTE",               "type": "int",   "default": 5,    "descripcion": "Días mínimos al vencimiento para evitar Gamma destructivo."},
+            {"key": "max_dte",            "label": "Max DTE",               "type": "int",   "default": 45,   "descripcion": "Días máximos al vencimiento."},
+            {"key": "max_spread_pct",     "label": "Max Spread Bid-Ask",    "type": "float", "default": 0.25, "descripcion": "Spread bid-ask máximo tolerable. Ejemplo: 0.25 = 25%."},
+            {"key": "stop_loss_pct",      "label": "Stop Loss %",           "type": "float", "default": 0.20, "descripcion": "Vender si la prima cae este %. Ejemplo: 0.20 = vender si pierde -20% de lo pagado."},
+            {"key": "take_profit_pct",    "label": "Take Profit %",         "type": "float", "default": 0.40, "descripcion": "Vender si la prima sube este %. Ejemplo: 0.40 = tomar ganancia al +40%."},
+            {"key": "lotes_por_trade",    "label": "Lotes por Trade",       "type": "int",   "default": 1,    "descripcion": "Contratos a comprar por señal."},
+            {"key": "max_posiciones",     "label": "Max Posiciones",        "type": "int",   "default": 2,    "descripcion": "Máximo de posiciones abiertas simultáneas."},
+            {"key": "cooldown_snapshots", "label": "Cooldown (snapshots)",  "type": "int",   "default": 5,    "descripcion": "Snapshots de espera post-cierre antes de abrir otra posición (~2.5 min)."},
+            {"key": "force_intraday_close", "label": "Cierre Intradiario", "type": "bool",  "default": True,  "descripcion": "Forzar cierre total a las 16:45 para bonificación IOL."},
+            {"key": "max_drawdown_ars",   "label": "Stop Loss Global (ARS)", "type": "int", "default": 0,    "descripcion": "Corta todo si la pérdida acumulada supera este monto."},
         ],
     },
 }
@@ -165,14 +191,20 @@ class StrategySlot:
                 pos_vega = None
                 if opt_quote and spot and spot > 0:
                     try:
-                        greeks = bsm_greeks(opt_quote, DEFAULT_RISK_FREE_RATE, spot=spot)
-                        if greeks and greeks.delta is not None and greeks.vega is not None:
-                            mult = 100 * p.cantidad
-                            sign = 1 if p.lado == "LONG" else -1
-                            pos_delta = greeks.delta * mult * sign
-                            pos_vega = greeks.vega * mult * sign
-                            net_delta += pos_delta
-                            net_vega += pos_vega
+                        T = opt_quote.dias_al_vencimiento / 365.0
+                        if T > 0 and opt_quote.strike > 0:
+                            sigma = 0.80  # σ de referencia para griegas de UI
+                            greeks = bsm_greeks(
+                                opt_quote.tipo, spot, opt_quote.strike,
+                                T, DEFAULT_RISK_FREE_RATE, sigma
+                            )
+                            if greeks and greeks.delta is not None and greeks.vega is not None:
+                                mult = 100 * p.cantidad
+                                sign = 1 if p.lado == "LONG" else -1
+                                pos_delta = greeks.delta * mult * sign
+                                pos_vega = greeks.vega * mult * sign
+                                net_delta += pos_delta
+                                net_vega += pos_vega
                     except Exception:
                         pass
                 
@@ -482,6 +514,12 @@ class TradingEngine:
                 if k in LongDirectionalConfig.__dataclass_fields__
             })
             strategy = LongDirectionalStrategy(oms, ld_cfg)
+        elif slot.tipo_estrategia == "daytrading_acciones":
+            dt_cfg = DaytradingConfig(**{
+                k: v for k, v in slot.config.items()
+                if k in DaytradingConfig.__dataclass_fields__
+            })
+            strategy = DaytradingStrategy(oms, dt_cfg)
         else:
             # default: options_mispricing
             cfg = StrategyConfig(**{
@@ -556,8 +594,66 @@ class TradingEngine:
                             f"R/R={top['reward_risk']:.2f}"
                         )
 
+            elif _slot.tipo_estrategia == "long_directional":
+                ld: LongDirectionalStrategy = _slot._strategy  # type: ignore[assignment]
+
+                # Forzar cierre intradiario si aplica
+                from datetime import datetime, time, timezone, timedelta
+                _TZ_ARG = timezone(timedelta(hours=-3))
+                now_arg = datetime.now(tz=_TZ_ARG).time()
+                if ld._config.force_intraday_close and time(16, 45) <= now_arg < time(17, 0):
+                    await ld.cerrar_todos(snapshot)
+                else:
+                    await ld.on_snapshot(snapshot)
+
+                # Serializar señales para la UI
+                _slot.last_signals = [
+                    {
+                        "simbolo": s.opcion.quote.simbolo,
+                        "lado": "LONG",
+                        "precio": s.costo,
+                        "razon": s.informacion,
+                        "score": round(s.score, 4),
+                    }
+                    for s in ld._last_evaluated_signals[:10]
+                ]
+                if ld._last_evaluated_signals:
+                    top = ld._last_evaluated_signals[0]
+                    _slot.add_log("INFO", f"Señal: {top.informacion}")
+
+            elif _slot.tipo_estrategia == "daytrading_acciones":
+                dt: DaytradingStrategy = _slot._strategy  # type: ignore[assignment]
+
+                # Forzar cierre intradiario si aplica
+                from datetime import datetime, time, timezone, timedelta
+                _TZ_ARG = timezone(timedelta(hours=-3))
+                now_arg = datetime.now(tz=_TZ_ARG).time()
+                if dt._config.force_intraday_close and time(16, 45) <= now_arg < time(17, 0):
+                    await dt.cerrar_todos(snapshot)
+                else:
+                    await dt.on_snapshot(snapshot)
+
+                # Serializar indicadores y señal para la UI
+                indicators = dt._last_indicators
+                if indicators:
+                    _slot.add_log("INFO",
+                        f"EMA{dt._config.ema_rapida}={indicators.get('ema_fast', '?')} "
+                        f"EMA{dt._config.ema_lenta}={indicators.get('ema_slow', '?')} "
+                        f"RSI={indicators.get('rsi', '?')} "
+                        f"Data={indicators.get('data_points', 0)} pts"
+                    )
+                if dt._last_signal:
+                    sig = dt._last_signal
+                    _slot.last_signals = [{
+                        "simbolo": sig.opcion.quote.simbolo,
+                        "lado": f"COMPRA {sig.direccion}",
+                        "precio": sig.precio_limite,
+                        "razon": sig.razon,
+                        "score": round(sig.score, 4),
+                    }]
+
             else:
-                # options_mispricing (y cualquier futuro tipo BSM)
+                # options_mispricing (default)
                 pricings = enrich_snapshot(snapshot, r=DEFAULT_RISK_FREE_RATE)
                 if pricings:
                     signals = _slot._strategy.evaluar(pricings)

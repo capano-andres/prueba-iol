@@ -387,7 +387,7 @@ Asegúrate de que el JSON sea perfectamente válido sin texto markdown adicional
               Cancelar
             </button>
             <button type="submit" className="btn btn--primary" disabled={loading} id="btn-create-strategy">
-              {loading ? '⏳ Creando...' : '✨ Crear Estrategia'}
+              {loading ? <><span className="spinner spinner--sm" style={{ marginRight: '0.25rem' }}></span> Creando...</> : '✨ Crear Estrategia'}
             </button>
           </div>
         </form>

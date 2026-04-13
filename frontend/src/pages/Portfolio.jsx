@@ -77,7 +77,10 @@ export default function Portfolio() {
           </div>
           <div className="card__body" style={{ padding: 0 }}>
             {loadingVars.pf ? (
-              <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>Cargando portafolio...</div>
+              <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                <span className="spinner spinner--primary" style={{ marginRight: '0.5rem' }}></span>
+                Cargando portafolio...
+              </div>
             ) : portfolio && portfolio.activos && portfolio.activos.length > 0 ? (
               <div className="table-container">
                 <table className="data-table">
@@ -148,7 +151,10 @@ export default function Portfolio() {
           </div>
           <div className="card__body" style={{ padding: 0 }}>
             {loadingVars.op ? (
-              <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>Cargando operaciones...</div>
+              <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                <span className="spinner spinner--primary" style={{ marginRight: '0.5rem' }}></span>
+                Cargando operaciones...
+              </div>
             ) : operations && operations.length > 0 ? (
               <div className="table-container" style={{ maxHeight: '400px', overflowY: 'auto' }}>
                 <table className="data-table">
