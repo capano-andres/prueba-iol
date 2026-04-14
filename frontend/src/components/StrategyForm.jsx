@@ -1,9 +1,12 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api/client';
+import { useToast, useConfirm } from './UIProvider';
 
 const ACTIVOS_POPULARES = ['COME', 'GGAL', 'BHIP', 'PAMP', 'YPFD', 'ALUA', 'BYMA', 'TRAN', 'SUPV'];
 
 export default function StrategyForm({ onClose, onCreated, strategyTypes }) {
+  const toast = useToast();
+  const confirm = useConfirm();
   const [form, setForm] = useState({
     nombre: '',
     tipo_estrategia: 'options_mispricing',
@@ -224,9 +227,15 @@ Asegúrate de que el JSON sea perfectamente válido sin texto markdown adicional
                   className="toggle"
                   id="strat-live-toggle"
                   checked={!form.dry_run}
-                  onChange={(e) => {
-                    if (e.target.checked && !confirm('⚠️ ATENCIÓN: El modo LIVE enviará órdenes reales al mercado. ¿Estás seguro?')) {
-                      return;
+                  onChange={async (e) => {
+                    if (e.target.checked) {
+                      const ok = await confirm({
+                        title: 'Activar modo LIVE',
+                        message: '⚠️ ATENCIÓN: El modo LIVE enviará órdenes reales al mercado. ¿Estás seguro?',
+                        type: 'danger',
+                        confirmText: 'Activar LIVE',
+                      });
+                      if (!ok) return;
                     }
                     handleChange('dry_run', !e.target.checked);
                   }}
@@ -298,7 +307,7 @@ Asegúrate de que el JSON sea perfectamente válido sin texto markdown adicional
                     type="button" 
                     onClick={() => {
                       navigator.clipboard.writeText(generateGeminiPrompt());
-                      alert('Prompt copiado al portapapeles. ¡Pégalo en Gemini y usá el modo "Pensar Profundamente"!');
+                      toast.success('Prompt copiado al portapapeles. ¡Pégalo en Gemini y usá el modo "Pensar Profundamente"!');
                     }}
                     style={{
                       background: 'rgba(100, 150, 255, 0.2)', border: '1px solid rgba(100, 150, 255, 0.5)',

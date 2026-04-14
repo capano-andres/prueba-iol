@@ -1,9 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api/client';
+import { useToast, useConfirm } from '../components/UIProvider';
 
 const ACTIVOS_QUICK = ['GGAL', 'YPFD', 'PAMP', 'ALUA', 'COME', 'BYMA', 'TRAN', 'SUPV', 'BHIP'];
 
 export default function Trading() {
+  const toast = useToast();
+  const confirm = useConfirm();
   const [ticker, setTicker] = useState('GGAL');
   const [mercado, setMercado] = useState('bCBA');
   const [quote, setQuote] = useState(null);
@@ -75,8 +78,13 @@ export default function Trading() {
 
   async function handlePlaceOrder() {
     if (!ticker || !orderPrice || !orderQty) return;
-    const msg = `¿Confirmar ${orderSide.toUpperCase()} de ${orderQty}x ${ticker} a $${orderPrice}?`;
-    if (!confirm(msg)) return;
+    const ok = await confirm({
+      title: `Confirmar ${orderSide.toUpperCase()}`,
+      message: `¿Confirmar ${orderSide.toUpperCase()} de ${orderQty}x ${ticker} a $${orderPrice}?`,
+      type: orderSide === 'venta' ? 'danger' : 'default',
+      confirmText: orderSide === 'compra' ? 'Comprar' : 'Vender',
+    });
+    if (!ok) return;
 
     setPlacing(true);
     setOrderError(null);
@@ -91,21 +99,29 @@ export default function Trading() {
         plazo: orderPlazo,
       });
       setOrderResult(res.data);
+      toast.success(`Orden enviada: ${orderSide.toUpperCase()} ${orderQty}x ${ticker} a $${orderPrice}`);
       fetchOperations();
     } catch (err) {
       setOrderError(err.message);
+      toast.error(`Error al enviar orden: ${err.message}`, 8000);
     } finally {
       setPlacing(false);
     }
   }
 
   async function handleCancelOrder(orderId) {
-    if (!confirm(`¿Cancelar orden #${orderId}?`)) return;
+    const ok = await confirm({
+      title: 'Cancelar orden',
+      message: `¿Cancelar orden #${orderId}?`,
+      type: 'danger',
+      confirmText: 'Cancelar orden',
+    });
+    if (!ok) return;
     try {
       await api.cancelOrder(orderId);
       fetchOperations();
     } catch (err) {
-      alert(`Error: ${err.message}`);
+      toast.error(err.message);
     }
   }
 

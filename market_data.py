@@ -303,6 +303,13 @@ class MarketDataFeed:
         """Registra un callback async que recibirá cada MarketSnapshot nuevo."""
         self._callbacks.append(callback)
 
+    def remove_callback(self, callback: SnapshotCallback) -> None:
+        """Elimina un callback registrado (evita duplicados al re-arrancar)."""
+        try:
+            self._callbacks.remove(callback)
+        except ValueError:
+            pass
+
     async def start(self) -> None:
         """Inicia el polling en segundo plano."""
         if self._running:
@@ -366,10 +373,16 @@ class MarketDataFeed:
             if q is not None:
                 opciones.append(q)
 
-        logger.debug(
-            "Snapshot: spot=%s | %d/%d opciones parseadas.",
-            spot, len(opciones), len(raw_opts),
+        # Logging ultra-verboso
+        n_con_puntas = sum(1 for o in opciones if o.bid is not None and o.ask is not None)
+        n_calls = sum(1 for o in opciones if o.tipo == "CALL")
+        n_puts = sum(1 for o in opciones if o.tipo == "PUT")
+        logger.info(
+            "📡 Feed %s: spot=%s | %d raw → %d parseadas (%dC/%dP) | %d con puntas bid/ask",
+            self._subyacente, spot, len(raw_opts), len(opciones),
+            n_calls, n_puts, n_con_puntas,
         )
+
         return MarketSnapshot(ts=datetime.now(), spot=spot, opciones=opciones)
 
     async def _fetch_spot(self) -> float | None:

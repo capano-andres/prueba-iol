@@ -1,4 +1,10 @@
+import { useState } from 'react';
+import { api } from '../api/client';
+
 export default function Header({ connected, status, page, onNavigate }) {
+  const [reconnecting, setReconnecting] = useState(false);
+  const [reconnectStatus, setReconnectStatus] = useState(null); // 'ok' | 'error' | null
+
   const now = new Date();
   const timeStr = now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
@@ -7,6 +13,21 @@ export default function Header({ connected, status, page, onNavigate }) {
     (now.getHours() === 10 && now.getMinutes() >= 30) ||
     (now.getHours() > 10 && now.getHours() < 17)
   );
+
+  async function handleReconnect() {
+    setReconnecting(true);
+    setReconnectStatus(null);
+    try {
+      await api.reconnect();
+      setReconnectStatus('ok');
+      setTimeout(() => setReconnectStatus(null), 3000);
+    } catch (err) {
+      setReconnectStatus('error');
+      setTimeout(() => setReconnectStatus(null), 5000);
+    } finally {
+      setReconnecting(false);
+    }
+  }
 
   return (
     <header className="app-header" id="app-header">
@@ -41,9 +62,32 @@ export default function Header({ connected, status, page, onNavigate }) {
       )}
 
       <div className="app-header__status">
-        <div className="status-badge">
+        {/* Connection status + Reconnect button */}
+        <div className="status-badge" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <span className={`status-dot ${connected ? 'status-dot--connected' : 'status-dot--disconnected'}`} />
           {connected ? 'Conectado' : 'Desconectado'}
+          <button
+            className="btn btn--sm btn--ghost"
+            onClick={handleReconnect}
+            disabled={reconnecting}
+            title="Forzar re-autenticación con IOL"
+            style={{
+              padding: '0.15rem 0.4rem',
+              fontSize: '0.65rem',
+              marginLeft: '0.25rem',
+              borderColor: reconnectStatus === 'ok' ? 'var(--color-profit)' 
+                         : reconnectStatus === 'error' ? 'var(--color-loss)' 
+                         : undefined,
+              color: reconnectStatus === 'ok' ? 'var(--color-profit)' 
+                   : reconnectStatus === 'error' ? 'var(--color-loss)' 
+                   : undefined,
+            }}
+          >
+            {reconnecting ? '⏳' 
+              : reconnectStatus === 'ok' ? '✅' 
+              : reconnectStatus === 'error' ? '❌' 
+              : '🔄'}
+          </button>
         </div>
 
         <div className="status-badge">

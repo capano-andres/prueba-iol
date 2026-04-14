@@ -1,7 +1,10 @@
 import { api } from '../api/client';
+import { useToast, useConfirm } from './UIProvider';
 
 export default function StrategyCard({ strategy, onSelect, onRefresh }) {
   const s = strategy;
+  const toast = useToast();
+  const confirm = useConfirm();
   const pnl = s.pnl_realizado || 0;
   const pnlClass = pnl > 0 ? 'metric__value--profit' : pnl < 0 ? 'metric__value--loss' : 'metric__value--neutral';
 
@@ -14,7 +17,7 @@ export default function StrategyCard({ strategy, onSelect, onRefresh }) {
       await api.startStrategy(s.id);
       onRefresh?.();
     } catch (err) {
-      alert(`Error: ${err.message}`);
+      toast.error(err.message);
     }
   }
 
@@ -23,27 +26,39 @@ export default function StrategyCard({ strategy, onSelect, onRefresh }) {
       await api.pauseStrategy(s.id);
       onRefresh?.();
     } catch (err) {
-      alert(`Error: ${err.message}`);
+      toast.error(err.message);
     }
   }
 
   async function handleStop() {
-    if (!confirm('¿Detener esta estrategia? Se cerrarán las posiciones abiertas.')) return;
+    const ok = await confirm({
+      title: 'Detener estrategia',
+      message: '¿Detener esta estrategia? Se cerrarán las posiciones abiertas.',
+      type: 'danger',
+      confirmText: 'Detener',
+    });
+    if (!ok) return;
     try {
       await api.stopStrategy(s.id);
       onRefresh?.();
     } catch (err) {
-      alert(`Error: ${err.message}`);
+      toast.error(err.message);
     }
   }
 
   async function handleDelete() {
-    if (!confirm(`¿Eliminar "${s.nombre}"? Esta acción no se puede deshacer.`)) return;
+    const ok = await confirm({
+      title: 'Eliminar estrategia',
+      message: `¿Eliminar "${s.nombre}"? Esta acción no se puede deshacer.`,
+      type: 'danger',
+      confirmText: 'Eliminar',
+    });
+    if (!ok) return;
     try {
       await api.deleteStrategy(s.id);
       onRefresh?.();
     } catch (err) {
-      alert(`Error: ${err.message}`);
+      toast.error(err.message);
     }
   }
 

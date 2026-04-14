@@ -51,8 +51,8 @@ class LongDirectionalConfig:
     """
 
     # ── Filtros temporales ────────────────────────────────────────────────
-    min_dte: int = 7
-    """DTE mínimo. Operar la semana de vencimiento pura expone a un Theta letal."""
+    min_dte: int = 1
+    """DTE mínimo (1 = dejar pasar todo para testing)."""
 
     max_dte: int = 90
     """DTE máximo."""
@@ -137,35 +137,44 @@ class LongDirectionalStrategy:
         candidatos = [p for p in pricings if p.quote.tipo == cfg.sesgo.upper()]
         
         signals = []
+        stats = {"total": len(candidatos), "sin_puntas": 0, "spread": 0, "dte": 0,
+                 "sin_delta": 0, "delta_rango": 0, "max_premium": 0, "ok": 0}
+
         for p in candidatos:
             q = p.quote
             
             # Liquidez y Spread
             if q.ask is None or q.bid is None or q.bid <= 0:
+                stats["sin_puntas"] += 1
                 continue
             spread_pct = q.spread_pct
             if spread_pct is None or spread_pct > cfg.max_spread_pct:
+                stats["spread"] += 1
                 continue
 
             # Temporalidad
             dte = q.dias_al_vencimiento
             if dte < cfg.min_dte or dte > cfg.max_dte:
+                stats["dte"] += 1
                 continue
 
             # Filtro Delta Target (La volatilidad o probabilidad real)
             delta = p.greeks.delta
             if delta is None:
+                stats["sin_delta"] += 1
                 continue
 
             delta_abs = abs(delta)
             
             # Tolerancia al objetivo del Delta: ±0.15 para abarcar una campana sana
             if abs(delta_abs - cfg.target_delta_abs) > 0.15:
+                stats["delta_rango"] += 1
                 continue
 
             # Límite Máximo de Prima (no pagar sobre-precios inflados por IV)
             costo = q.ask
             if costo > (spot * cfg.max_premium_pct):
+                stats["max_premium"] += 1
                 continue
             
             # El Score beneficia a las de Delta más alineado, IV más bajo (relativo),
@@ -177,9 +186,26 @@ class LongDirectionalStrategy:
                 costo=costo,
                 score=score
             ))
+            stats["ok"] += 1
 
         # Las mejores configuraciones primero
         signals.sort(key=lambda s: s.score, reverse=True)
+
+        # Logging ultra-verboso
+        logger.info(
+            "🔍 Long Dir [%s]: %d candidatos | Señales=%d | "
+            "Filtradas → sin_puntas=%d, spread=%d, dte=%d, sin_delta=%d, delta_rango=%d, max_premium=%d",
+            cfg.sesgo, stats["total"], stats["ok"],
+            stats["sin_puntas"], stats["spread"], stats["dte"],
+            stats["sin_delta"], stats["delta_rango"], stats["max_premium"],
+        )
+        for s in signals[:5]:
+            q = s.opcion.quote
+            logger.info(
+                "  → %s K=%.2f Δ=%.2f ask=%.2f DTE=%d score=%.2f",
+                q.simbolo, q.strike, s.opcion.greeks.delta, q.ask, q.dias_al_vencimiento, s.score,
+            )
+
         return signals
 
     async def _ejecutar_signals(self, signals: list[LongSignal], activas: list) -> None:
@@ -236,6 +262,13 @@ class LongDirectionalStrategy:
                 razon = f"STOP-LOSS ({variacion*100:.1f}% <= {-cfg.stop_loss_pct*100:.1f}%)"
             elif variacion >= cfg.take_profit_pct:
                 razon = f"TAKE-PROFIT ({variacion*100:.1f}% >= {cfg.take_profit_pct*100:.1f}%)"
+            else:
+                logger.info(
+                    "📈 LD monitor %s: var=%.1f%% (SL=%.0f%% TP=+%.0f%%) mid=%.2f pagado=%.2f",
+                    p.simbolo, variacion * 100,
+                    -cfg.stop_loss_pct * 100, cfg.take_profit_pct * 100,
+                    valor_actual, precio_pagado,
+                )
                 
             if razon:
                 logger.info("LongDirectional: Cerrando %s por %s", p.simbolo, razon)

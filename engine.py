@@ -40,7 +40,7 @@ STRATEGY_TYPES = {
             {"key": "min_mispricing_pct", "label": "Min Mispricing %", "type": "float", "default": 0.05, "descripcion": "Desviación mínima vs precio teórico BSM para operar. Ejemplo: 0.05 = 5%, 0.10 = 10%."},
             {"key": "min_spread_pct",     "label": "Min Spread %",     "type": "float", "default": 0.02, "descripcion": "Spread compra-venta mínimo requerido. Ejemplo: 0.02 = 2%, 0.05 = 5%."},
             {"key": "max_spread_pct",     "label": "Max Spread %",     "type": "float", "default": 0.30, "descripcion": "Spread máximo tolerable (opciones muy ilíquidas). Ejemplo: 0.30 = 30%."},
-            {"key": "min_dte",            "label": "Min DTE",          "type": "int",   "default": 5, "descripcion": "Días mínimos al vencimiento. Evita la última semana por Gamma explosivo."},
+            {"key": "min_dte",            "label": "Min DTE",          "type": "int",   "default": 1, "descripcion": "Días mínimos al vencimiento. 1 = sin restricción."},
             {"key": "max_dte",            "label": "Max DTE",          "type": "int",   "default": 45, "descripcion": "Días máximos al vencimiento."},
             {"key": "min_delta_abs",      "label": "Min |Delta|",      "type": "float", "default": 0.15, "descripcion": "Delta mínimo absoluto. Filtra opciones muy OTM que no se mueven. Ejemplo: 0.15 = delta 15."},
             {"key": "max_delta_abs",      "label": "Max |Delta|",      "type": "float", "default": 0.85, "descripcion": "Delta máximo absoluto. Evita opciones Deep ITM muy caras. Ejemplo: 0.85 = delta 85."},
@@ -59,7 +59,7 @@ STRATEGY_TYPES = {
             {"key": "strike_width_pct",     "label": "Ancho Spread %",         "type": "float", "default": 0.12, "descripcion": "Distancia entre strikes. Ejemplo: 0.12 = 12% entre el comprado y el vendido."},
             {"key": "atm_offset_pct",       "label": "Offset ATM %",           "type": "float", "default": 0.00, "descripcion": "Desplazamiento del punto de partida. 0 = comprar justo At The Money."},
             {"key": "max_net_premium_pct",  "label": "Max Prima Neta %",       "type": "float", "default": 0.08, "descripcion": "Costo máximo del spread como % del spot. Ejemplo: 0.08 = 8% del precio."},
-            {"key": "min_dte",              "label": "Min DTE",                "type": "int",   "default": 10, "descripcion": "Días mínimos al vencimiento."},
+            {"key": "min_dte",              "label": "Min DTE",                "type": "int",   "default": 1, "descripcion": "Días mínimos al vencimiento."},
             {"key": "max_dte",              "label": "Max DTE",                "type": "int",   "default": 75, "descripcion": "Días máximos al vencimiento."},
             {"key": "min_spread_pct",       "label": "Min Spread Bid-Ask",     "type": "float", "default": 0.01, "descripcion": "Spread bid-ask mínimo. Ejemplo: 0.01 = 1%. Filtra cotizaciones estancadas."},
             {"key": "max_spread_pct",       "label": "Max Spread Bid-Ask",     "type": "float", "default": 0.25, "descripcion": "Spread bid-ask máximo tolerable. Ejemplo: 0.25 = 25%."},
@@ -84,7 +84,7 @@ STRATEGY_TYPES = {
             {"key": "max_premium_pct",    "label": "Max Prima %",        "type": "float",   "default": 0.10, "descripcion": "Costo máximo permitido como % del spot. Ejemplo: 0.10 = 10% del precio de la acción."},
             {"key": "stop_loss_pct",      "label": "Stop Loss %",        "type": "float",   "default": 0.35, "descripcion": "Vender si la prima cae este %. Ejemplo: 0.35 = vender si pierde 35% de lo pagado."},
             {"key": "take_profit_pct",    "label": "Take Profit %",      "type": "float",   "default": 0.60, "descripcion": "Vender si la prima sube este %. Ejemplo: 0.60 = tomar ganancia al +60%."},
-            {"key": "min_dte",            "label": "Min DTE",            "type": "int",     "default": 7, "descripcion": "Días mínimos al vencimiento."},
+            {"key": "min_dte",            "label": "Min DTE",            "type": "int",     "default": 1, "descripcion": "Días mínimos al vencimiento."},
             {"key": "max_dte",            "label": "Max DTE",            "type": "int",     "default": 90, "descripcion": "Días máximos al vencimiento."},
             {"key": "max_spread_pct",     "label": "Max Spread Bid-Ask", "type": "float",   "default": 0.25, "descripcion": "Spread bid-ask máximo tolerable. Ejemplo: 0.25 = 25%."},
             {"key": "lotes_por_trade",    "label": "Lotes por Trade",    "type": "int",     "default": 1, "descripcion": "Contratos a comprar por señal."},
@@ -108,7 +108,7 @@ STRATEGY_TYPES = {
             {"key": "rsi_overbought",     "label": "RSI Sobrecompra",       "type": "int",   "default": 70,   "descripcion": "No comprar CALLs si RSI supera este nivel (mercado recalentado)."},
             {"key": "rsi_oversold",       "label": "RSI Sobreventa",        "type": "int",   "default": 30,   "descripcion": "No comprar PUTs si RSI cae debajo de este nivel (mercado ya colapsado)."},
             {"key": "target_delta",       "label": "Delta Objetivo",        "type": "float", "default": 0.50, "descripcion": "Delta absoluto para seleccionar opción. 0.50 = ATM (At The Money)."},
-            {"key": "min_dte",            "label": "Min DTE",               "type": "int",   "default": 5,    "descripcion": "Días mínimos al vencimiento para evitar Gamma destructivo."},
+            {"key": "min_dte",            "label": "Min DTE",               "type": "int",   "default": 1,    "descripcion": "Días mínimos al vencimiento."},
             {"key": "max_dte",            "label": "Max DTE",               "type": "int",   "default": 45,   "descripcion": "Días máximos al vencimiento."},
             {"key": "max_spread_pct",     "label": "Max Spread Bid-Ask",    "type": "float", "default": 0.25, "descripcion": "Spread bid-ask máximo tolerable. Ejemplo: 0.25 = 25%."},
             {"key": "stop_loss_pct",      "label": "Stop Loss %",           "type": "float", "default": 0.20, "descripcion": "Vender si la prima cae este %. Ejemplo: 0.20 = vender si pierde -20% de lo pagado."},
@@ -324,6 +324,20 @@ class TradingEngine:
 
         logger.info("TradingEngine apagado.")
 
+    async def reconnect(self) -> bool:
+        """Fuerza re-autenticación del IOLClient."""
+        if not self._client:
+            logger.error("reconnect: No hay IOLClient instanciado.")
+            return False
+        try:
+            logger.info("Forzando re-autenticación IOL...")
+            await self._client.authenticate()
+            logger.info("Re-autenticación exitosa.")
+            return True
+        except Exception as exc:
+            logger.error("Error en re-autenticación: %s", exc)
+            return False
+
     # ── Estado ────────────────────────────────────────────────────────────
 
     @property
@@ -530,7 +544,11 @@ class TradingEngine:
         slot._strategy = strategy
         slot._feed_key = feed_key
 
-        # Conectar callbacks al feed
+        # Conectar callbacks al feed (limpiar callback previo si existe)
+        # Guardar referencia para poder removerlo después
+        if hasattr(slot, '_snapshot_callback') and slot._snapshot_callback:
+            feed.remove_callback(slot._snapshot_callback)
+
         async def _on_snapshot(snapshot: MarketSnapshot, _slot=slot) -> None:
             if _slot.estado != "running":
                 return
@@ -681,6 +699,7 @@ class TradingEngine:
                 "data": _slot.to_dict(),
             })
 
+        slot._snapshot_callback = _on_snapshot
         feed.on_snapshot(_on_snapshot)
 
         slot.estado = "running"

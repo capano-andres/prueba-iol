@@ -24,12 +24,15 @@ from engine import TradingEngine
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)-8s %(name)s - %(message)s",
-    datefmt="%H:%M:%S",
-    stream=sys.stdout,
+# Force UTF-8 on Windows (cp1252 can't encode emojis in log messages)
+_handler = logging.StreamHandler(
+    open(sys.stdout.fileno(), mode='w', encoding='utf-8', closefd=False)
 )
+_handler.setFormatter(logging.Formatter(
+    fmt="%(asctime)s %(levelname)-8s %(name)s - %(message)s",
+    datefmt="%H:%M:%S",
+))
+logging.basicConfig(level=logging.INFO, handlers=[_handler])
 logger = logging.getLogger("server")
 
 # ─── Engine global ────────────────────────────────────────────────────────────

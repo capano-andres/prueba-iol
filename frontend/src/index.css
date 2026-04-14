@@ -888,17 +888,25 @@ body {
 }
 
 .detail-header__back {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 0.5rem;
   color: var(--text-secondary);
   font-size: 0.85rem;
   text-decoration: none;
   cursor: pointer;
-  transition: color var(--transition-fast);
+  transition: all var(--transition-fast);
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  padding: 0.45rem 1rem;
+  font-family: var(--font-sans);
+  font-weight: 500;
 }
 .detail-header__back:hover {
   color: var(--accent-purple-light);
+  border-color: var(--accent-purple);
+  background: var(--bg-card-hover);
 }
 
 .detail-grid {
@@ -932,6 +940,7 @@ body {
   border-radius: var(--radius-md);
   padding: 1rem 1.25rem;
   transition: all var(--transition-base);
+  overflow: hidden;
 }
 
 .summary-stat:hover {
@@ -1109,4 +1118,21 @@ body {
   .summary-stats {
     grid-template-columns: 1fr;
   }
+}
+
+/* ─── Toast & Confirm Animations ─────────────────────────────────────────── */
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(100px) scale(0.9); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+@keyframes modal-bg-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes modal-in {
+  from { opacity: 0; transform: scale(0.9) translateY(10px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
 }

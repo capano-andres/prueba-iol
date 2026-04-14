@@ -3,6 +3,7 @@ import './index.css';
 import { api, createWebSocket } from './api/client';
 import Header from './components/Header';
 import AccountPanel from './components/AccountPanel';
+import { UIProvider } from './components/UIProvider';
 import Dashboard from './pages/Dashboard';
 import StrategyDetail from './pages/StrategyDetail';
 import Portfolio from './pages/Portfolio';
@@ -109,32 +110,34 @@ export default function App() {
   const selectedStrategy = strategies.find(s => s.id === selectedId);
 
   return (
-    <div className="app-layout">
-      <Header connected={connected} status={status} time={time} page={page} onNavigate={setPage} />
-      {connected && page !== 'portfolio' && <AccountPanel />}
+    <UIProvider>
+      <div className="app-layout">
+        <Header connected={connected} status={status} time={time} page={page} onNavigate={setPage} />
+        {connected && page !== 'portfolio' && <AccountPanel />}
 
-      <main className="app-main">
-        {page === 'trading' ? (
-          <Trading />
-        ) : page === 'portfolio' ? (
-          <Portfolio />
-        ) : page === 'dashboard' ? (
-          <Dashboard
-            strategies={strategies}
-            strategyTypes={strategyTypes}
-            onRefresh={fetchStrategies}
-            onSelectStrategy={handleSelectStrategy}
-          />
-        ) : (
-          <StrategyDetail
-            strategyId={selectedId}
-            strategy={selectedStrategy}
-            strategyTypes={strategyTypes}
-            onBack={handleBack}
-            onRefresh={fetchStrategies}
-          />
-        )}
-      </main>
-    </div>
+        <main className="app-main">
+          {page === 'trading' ? (
+            <Trading />
+          ) : page === 'portfolio' ? (
+            <Portfolio />
+          ) : page === 'dashboard' ? (
+            <Dashboard
+              strategies={strategies}
+              strategyTypes={strategyTypes}
+              onRefresh={fetchStrategies}
+              onSelectStrategy={handleSelectStrategy}
+            />
+          ) : (
+            <StrategyDetail
+              strategyId={selectedId}
+              strategy={selectedStrategy}
+              strategyTypes={strategyTypes}
+              onBack={handleBack}
+              onRefresh={fetchStrategies}
+            />
+          )}
+        </main>
+      </div>
+    </UIProvider>
   );
 }

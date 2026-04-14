@@ -55,8 +55,8 @@ class DaytradingConfig:
     target_delta: float = 0.50
     """Delta absoluto objetivo (0.50 = ATM). Busca la opción más cercana."""
 
-    min_dte: int = 5
-    """DTE mínimo para evitar Gamma extremo en la última semana."""
+    min_dte: int = 1
+    """DTE mínimo (1 = dejar pasar todo para testing)."""
 
     max_dte: int = 45
     """DTE máximo."""
@@ -226,11 +226,19 @@ class DaytradingStrategy:
             candidatos.append((delta_dist, p))
 
         if not candidatos:
+            logger.info("🎯 DT selección %s: 0 candidatos tras filtros (DTE/liquidez/delta)", tipo)
             return None
 
         # Ordenar por cercanía al delta target
         candidatos.sort(key=lambda x: x[0])
-        return candidatos[0][1]
+        best = candidatos[0][1]
+        logger.info(
+            "🎯 DT selección %s: %d candidatos. Mejor=%s (K=%.1f Δ=%.2f ask=%.2f DTE=%d)",
+            tipo, len(candidatos), best.quote.simbolo,
+            best.quote.strike, best.greeks.delta, best.quote.ask or 0,
+            best.quote.dias_al_vencimiento,
+        )
+        return best
 
     # ── API pública ───────────────────────────────────────────────────────
 
@@ -258,9 +266,11 @@ class DaytradingStrategy:
         # 2. Verificar warmup
         min_data = max(cfg.ema_lenta, cfg.rsi_periodos + 1)
         if len(self._price_history) < min_data:
-            logger.debug(
-                "Daytrading: Warmup %d/%d snapshots",
-                len(self._price_history), min_data,
+            remaining = min_data - len(self._price_history)
+            eta_seconds = remaining * 30  # ~30s por snapshot
+            logger.info(
+                "⏳ Daytrading warmup: %d/%d snapshots (faltan ~%d seg / ~%.1f min)",
+                len(self._price_history), min_data, eta_seconds, eta_seconds / 60,
             )
             return
 
@@ -276,6 +286,21 @@ class DaytradingStrategy:
             "spot": spot,
             "data_points": len(self._price_history),
         }
+
+        # Log de indicadores en cada tick
+        ema_diff = ema_fast - ema_slow
+        prev_diff = (self._prev_ema_fast - self._prev_ema_slow) if self._prev_ema_fast is not None and self._prev_ema_slow is not None else None
+        proximity = ""
+        if prev_diff is not None:
+            if abs(ema_diff) < abs(prev_diff) and ((prev_diff > 0) != (ema_diff > 0) or abs(ema_diff) < spot * 0.001):
+                proximity = " 🔄 CRUCE INMINENTE"
+            elif abs(ema_diff) < spot * 0.002:
+                proximity = " ⚠️ EMAs convergiendo"
+        logger.info(
+            "📊 DT spot=%.2f | EMA%d=%.2f EMA%d=%.2f diff=%.2f | RSI=%.1f | %dpts%s",
+            spot, cfg.ema_rapida, ema_fast, cfg.ema_lenta, ema_slow,
+            ema_diff, rsi, len(self._price_history), proximity,
+        )
 
         # 4. Enriquecer opciones con griegas (necesario para selección)
         pricings = enrich_snapshot(snapshot, r=DEFAULT_RISK_FREE_RATE)
@@ -296,24 +321,24 @@ class DaytradingStrategy:
             # Golden Cross: EMA rápida cruza por encima de EMA lenta
             if prev_diff <= 0 and curr_diff > 0:
                 logger.info(
-                    "Daytrading: GOLDEN CROSS detectado (EMA%d=%.2f > EMA%d=%.2f, RSI=%.1f)",
+                    "✨ Daytrading: GOLDEN CROSS detectado (EMA%d=%.2f > EMA%d=%.2f, RSI=%.1f)",
                     cfg.ema_rapida, ema_fast, cfg.ema_lenta, ema_slow, rsi,
                 )
                 if rsi < cfg.rsi_overbought:
                     await self._intentar_entrada("CALL", pricings, spot, ema_fast, ema_slow, rsi)
                 else:
-                    logger.info("Daytrading: Golden Cross ignorado — RSI=%.1f > %d (sobrecompra)", rsi, cfg.rsi_overbought)
+                    logger.info("🚫 Golden Cross BLOQUEADO por RSI=%.1f >= %d (sobrecompra)", rsi, cfg.rsi_overbought)
 
             # Death Cross: EMA rápida cruza por debajo de EMA lenta
             elif prev_diff >= 0 and curr_diff < 0:
                 logger.info(
-                    "Daytrading: DEATH CROSS detectado (EMA%d=%.2f < EMA%d=%.2f, RSI=%.1f)",
+                    "📉 Daytrading: DEATH CROSS detectado (EMA%d=%.2f < EMA%d=%.2f, RSI=%.1f)",
                     cfg.ema_rapida, ema_fast, cfg.ema_lenta, ema_slow, rsi,
                 )
                 if rsi > cfg.rsi_oversold:
                     await self._intentar_entrada("PUT", pricings, spot, ema_fast, ema_slow, rsi)
                 else:
-                    logger.info("Daytrading: Death Cross ignorado — RSI=%.1f < %d (sobreventa)", rsi, cfg.rsi_oversold)
+                    logger.info("🚫 Death Cross BLOQUEADO por RSI=%.1f <= %d (sobreventa)", rsi, cfg.rsi_oversold)
 
         # Guardar EMAs para detectar cruce en el siguiente tick
         self._prev_ema_fast = ema_fast
@@ -418,6 +443,14 @@ class DaytradingStrategy:
                 razon = (
                     f"TAKE-PROFIT (prima {variacion * 100:+.1f}% "
                     f">= +{cfg.take_profit_pct * 100:.0f}%)"
+                )
+            else:
+                # Log de monitoreo SL/TP
+                logger.info(
+                    "📈 DT monitor %s: var=%.1f%% (SL=%.0f%% TP=+%.0f%%) mid=%.2f pagado=%.2f",
+                    pos.simbolo, variacion * 100,
+                    -cfg.stop_loss_pct * 100, cfg.take_profit_pct * 100,
+                    valor_actual, precio_pagado,
                 )
 
             if razon:

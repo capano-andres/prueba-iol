@@ -8,15 +8,27 @@ const WS_BASE = isLocalhost
 
 async function request(path, options = {}) {
   const url = `${API_BASE}${path}`;
-  const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
-    ...options,
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `HTTP ${res.status}`);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(url, {
+      headers: { 'Content-Type': 'application/json', ...options.headers },
+      signal: controller.signal,
+      ...options,
+    });
+    clearTimeout(timeoutId);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    return res.json();
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      throw new Error('Timeout: la solicitud tardó más de 15 segundos');
+    }
+    throw err;
   }
-  return res.json();
 }
 
 export const api = {
@@ -41,6 +53,8 @@ export const api = {
   cancelOrder: (orderId) => request(`/trading/order/${orderId}`, { method: 'DELETE' }),
   getTradingOperations: () => request('/trading/operations'),
   getPanel: (instrumento, panel) => request(`/trading/panel/${instrumento}/${panel}`),
+  // Reconnect
+  reconnect: () => request('/reconnect', { method: 'POST' }),
 };
 
 // ─── WebSocket Hook ─────────────────────────────────────────────────────────

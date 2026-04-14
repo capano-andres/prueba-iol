@@ -68,8 +68,8 @@ class BullSpreadConfig:
     """
 
     # ── Filtros temporales ────────────────────────────────────────────────
-    min_dte: int = 10
-    """DTE mínimo. Evitar vencimientos próximos con Gamma extremo no controlado."""
+    min_dte: int = 1
+    """DTE mínimo (1 = dejar pasar todo para testing)."""
 
     max_dte: int = 75
     """DTE máximo. El documento analiza vencimientos Junio 2026 (~69 DTE).
@@ -393,6 +393,15 @@ class BullCallSpreadStrategy:
                     expiry        = long_q.expiry,
                     score         = reward_risk,
                 ))
+                logger.info(
+                    "🔍 BullSpread par: LONG %s (K=%.1f) + SHORT %s (K=%.1f) | "
+                    "prima=%.2f R/R=%.2f BEP=%.2f DTE=%d",
+                    long_q.simbolo, long_q.strike, short_q.simbolo, short_q.strike,
+                    net_premium, reward_risk, breakeven, long_q.dias_al_vencimiento,
+                )
+
+        if not signals:
+            logger.info("🔍 BullSpread: 0 pares encontrados para esta expiry")
 
         return signals
 

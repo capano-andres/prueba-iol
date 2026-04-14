@@ -1,10 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api/client';
+import { useToast, useConfirm } from '../components/UIProvider';
 import PositionsTable from '../components/PositionsTable';
 import SignalsList from '../components/SignalsList';
 import LogViewer from '../components/LogViewer';
 
 export default function StrategyDetail({ strategyId, strategy, strategyTypes, onBack, onRefresh }) {
+  const toast = useToast();
+  const confirm = useConfirm();
   const [logs, setLogs] = useState([]);
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState({ config: {} });
@@ -69,16 +72,22 @@ export default function StrategyDetail({ strategyId, strategy, strategyTypes, on
 
   async function handleStart() {
     try { await api.startStrategy(s.id); onRefresh?.(); }
-    catch (err) { alert(`Error: ${err.message}`); }
+    catch (err) { toast.error(err.message); }
   }
   async function handlePause() {
     try { await api.pauseStrategy(s.id); onRefresh?.(); }
-    catch (err) { alert(`Error: ${err.message}`); }
+    catch (err) { toast.error(err.message); }
   }
   async function handleStop() {
-    if (!confirm('¿Detener esta estrategia?')) return;
+    const ok = await confirm({
+      title: 'Detener estrategia',
+      message: '¿Detener esta estrategia? Se cerrarán las posiciones abiertas.',
+      type: 'danger',
+      confirmText: 'Detener',
+    });
+    if (!ok) return;
     try { await api.stopStrategy(s.id); onRefresh?.(); }
-    catch (err) { alert(`Error: ${err.message}`); }
+    catch (err) { toast.error(err.message); }
   }
 
   // ── Edit handlers ──────────────────────────────────────────────────────
@@ -371,8 +380,16 @@ export default function StrategyDetail({ strategyId, strategy, strategyTypes, on
                       type="checkbox"
                       className="toggle"
                       checked={!editForm.dry_run}
-                      onChange={(e) => {
-                        if (e.target.checked && !confirm('⚠️ LIVE enviará órdenes reales. ¿Seguro?')) return;
+                      onChange={async (e) => {
+                        if (e.target.checked) {
+                          const ok = await confirm({
+                            title: 'Activar modo LIVE',
+                            message: '⚠️ LIVE enviará órdenes reales al mercado. ¿Seguro?',
+                            type: 'danger',
+                            confirmText: 'Activar LIVE',
+                          });
+                          if (!ok) return;
+                        }
                         handleEditChange('dry_run', !e.target.checked);
                       }}
                     />

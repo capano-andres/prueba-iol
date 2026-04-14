@@ -54,6 +54,16 @@ async def get_status() -> dict:
     }
 
 
+@router.post("/reconnect")
+async def reconnect_iol() -> dict:
+    """Fuerza re-autenticación del cliente IOL."""
+    engine = get_engine()
+    ok = await engine.reconnect()
+    if ok:
+        return {"ok": True, "message": "Reconexión exitosa"}
+    raise HTTPException(500, "Error al reconectar con IOL. Verificar credenciales y conectividad.")
+
+
 @router.get("/account")
 async def get_account() -> dict:
     engine = get_engine()

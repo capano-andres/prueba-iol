@@ -34,7 +34,7 @@ class StrategyConfig:
     max_spread_pct: float = 0.30       # spread máximo 30% (evitar ilíquidas)
 
     # Filtros temporales
-    min_dte: int = 5                   # mínimo 5 DTE (evitar gamma extremo)
+    min_dte: int = 1                   # mínimo 1 DTE (dejar pasar todo para testing)
     max_dte: int = 45                  # máximo 45 DTE
 
     # Filtros de delta
@@ -90,12 +90,35 @@ class Strategy:
         """
         signals: list[TradeSignal] = []
 
+        # Contadores de filtros para logging
+        stats = {"total": 0, "sin_puntas": 0, "spread": 0, "dte": 0,
+                 "sin_iv": 0, "delta": 0, "mispricing": 0, "near_miss": 0, "ok": 0}
+
         for p in pricings:
-            signal = self._evaluar_uno(p)
+            stats["total"] += 1
+            signal, reason = self._evaluar_uno(p)
             if signal is not None:
                 signals.append(signal)
+                stats["ok"] += 1
+            elif reason:
+                stats[reason] += 1
 
         signals.sort(key=lambda s: s.score, reverse=True)
+
+        # Log ultra-verboso
+        logger.info(
+            "📊 Mispricing eval: %d opciones | Señales=%d | "
+            "Filtradas → sin_puntas=%d, spread=%d, dte=%d, sin_iv=%d, delta=%d, mispricing=%d (near_miss=%d)",
+            stats["total"], stats["ok"],
+            stats["sin_puntas"], stats["spread"], stats["dte"],
+            stats["sin_iv"], stats["delta"], stats["mispricing"], stats["near_miss"],
+        )
+        for s in signals[:5]:
+            logger.info(
+                "  ✅ SEÑAL: %s %s score=%.3f precio=%.2f | %s",
+                s.lado, s.pricing.quote.simbolo, s.score, s.precio_limite, s.razon,
+            )
+
         return signals
 
     async def ejecutar_signals(self, signals: list[TradeSignal]) -> None:
@@ -154,40 +177,40 @@ class Strategy:
 
     # ── Evaluación individual ─────────────────────────────────────────────
 
-    def _evaluar_uno(self, p: OptionPricing) -> TradeSignal | None:
+    def _evaluar_uno(self, p: OptionPricing) -> tuple[TradeSignal | None, str | None]:
         q   = p.quote
         g   = p.greeks
         cfg = self._config
 
         # 1. Liquidez: bid y ask deben existir (fuera de rueda son null)
         if q.bid is None or q.ask is None:
-            return None
+            return None, "sin_puntas"
 
         # 2. Spread dentro del rango aceptable
         spread = q.spread_pct
         if spread is None:
-            return None
+            return None, "spread"
         if not (cfg.min_spread_pct <= spread <= cfg.max_spread_pct):
-            return None
+            return None, "spread"
 
         # 3. DTE dentro del rango objetivo
         dte = q.dias_al_vencimiento
         if not (cfg.min_dte <= dte <= cfg.max_dte):
-            return None
+            return None, "dte"
 
         # 4. IV debe ser calculable
         if g.iv is None:
-            return None
+            return None, "sin_iv"
 
         # 5. Delta dentro del rango (evitar deep OTM / deep ITM)
         delta_abs = abs(g.delta)
         if not (cfg.min_delta_abs <= delta_abs <= cfg.max_delta_abs):
-            return None
+            return None, "delta"
 
         # 6. Mispricing suficiente para cubrir costos de transacción
         mispricing = p.mispricing
         if mispricing is None or g.price <= 0:
-            return None
+            return None, "mispricing"
 
         mispricing_pct = mispricing / g.price
 
@@ -203,7 +226,7 @@ class Strategy:
                     f"misprice={mispricing_pct:+.1%} DTE={dte}"
                 ),
                 score = mispricing_pct,
-            )
+            ), None
 
         if mispricing_pct < -cfg.min_mispricing_pct:
             # Mercado subvalora -> comprar (LONG), precio al ask
@@ -217,6 +240,15 @@ class Strategy:
                     f"misprice={mispricing_pct:+.1%} DTE={dte}"
                 ),
                 score = abs(mispricing_pct),
-            )
+            ), None
 
-        return None
+        # Near-miss: mispricing está cerca del umbral (>80% del mínimo)
+        if abs(mispricing_pct) > cfg.min_mispricing_pct * 0.8:
+            logger.info(
+                "  🔸 Near-miss %s: misprice=%.2f%% (umbral=%.2f%%) IV=%.1f%% DTE=%d",
+                q.simbolo, mispricing_pct * 100, cfg.min_mispricing_pct * 100,
+                g.iv * 100, dte,
+            )
+            return None, "near_miss"
+
+        return None, "mispricing"
