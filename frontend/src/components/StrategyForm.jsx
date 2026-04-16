@@ -228,16 +228,17 @@ Asegúrate de que el JSON sea perfectamente válido sin texto markdown adicional
                   id="strat-live-toggle"
                   checked={!form.dry_run}
                   onChange={async (e) => {
-                    if (e.target.checked) {
+                    const wantLive = e.target.checked;
+                    handleChange('dry_run', !wantLive);
+                    if (wantLive) {
                       const ok = await confirm({
                         title: 'Activar modo LIVE',
                         message: '⚠️ ATENCIÓN: El modo LIVE enviará órdenes reales al mercado. ¿Estás seguro?',
                         type: 'danger',
                         confirmText: 'Activar LIVE',
                       });
-                      if (!ok) return;
+                      if (!ok) handleChange('dry_run', true);
                     }
-                    handleChange('dry_run', !e.target.checked);
                   }}
                 />
               </div>

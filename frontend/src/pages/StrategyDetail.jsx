@@ -28,9 +28,13 @@ export default function StrategyDetail({ strategyId, strategy, strategyTypes, on
     return () => clearInterval(interval);
   }, [fetchLogs, strategy?.estado]);
 
-  // Initialize edit form when entering edit mode
+  // Initialize edit form ONLY when entering edit mode (editing false→true)
+  // NOT on every strategy update — that would overwrite local changes mid-edit
+  const prevEditingRef = useRef(false);
   useEffect(() => {
-    if (editing && strategy) {
+    const wasEditing = prevEditingRef.current;
+    prevEditingRef.current = editing;
+    if (editing && !wasEditing && strategy) {
       setEditForm({
         nombre: strategy.nombre || '',
         fondos_asignados: strategy.fondos_asignados || 0,
@@ -39,7 +43,7 @@ export default function StrategyDetail({ strategyId, strategy, strategyTypes, on
         config: { ...(strategy.config || {}) },
       });
     }
-  }, [editing, strategy]);
+  }, [editing]);
 
   if (!strategy) {
     return (
@@ -110,6 +114,7 @@ export default function StrategyDetail({ strategyId, strategy, strategyTypes, on
   async function handleSave() {
     setSaving(true);
     setEditError(null);
+    console.log('[handleSave] Enviando:', JSON.stringify(editForm));
     try {
       await api.updateStrategy(s.id, editForm);
       setEditing(false);
@@ -381,16 +386,19 @@ export default function StrategyDetail({ strategyId, strategy, strategyTypes, on
                       className="toggle"
                       checked={!editForm.dry_run}
                       onChange={async (e) => {
-                        if (e.target.checked) {
+                        const wantLive = e.target.checked;
+                        // Actualizar estado inmediatamente para que el toggle se vea responsive
+                        handleEditChange('dry_run', !wantLive);
+                        // Si activando LIVE, pedir confirmación y revertir si cancela
+                        if (wantLive) {
                           const ok = await confirm({
                             title: 'Activar modo LIVE',
-                            message: '⚠️ LIVE enviará órdenes reales al mercado. ¿Seguro?',
+                            message: '⚠️ ATENCIÓN: El modo LIVE enviará órdenes reales al mercado. ¿Estás seguro?',
                             type: 'danger',
                             confirmText: 'Activar LIVE',
                           });
-                          if (!ok) return;
+                          if (!ok) handleEditChange('dry_run', true); // revertir
                         }
-                        handleEditChange('dry_run', !e.target.checked);
                       }}
                     />
                     <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>

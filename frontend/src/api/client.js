@@ -6,10 +6,10 @@ const WS_BASE = isLocalhost
 
 // ─── REST Client ────────────────────────────────────────────────────────────
 
-async function request(path, options = {}) {
+async function request(path, options = {}, timeoutMs = 15000) {
   const url = `${API_BASE}${path}`;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       headers: { 'Content-Type': 'application/json', ...options.headers },
@@ -25,7 +25,8 @@ async function request(path, options = {}) {
   } catch (err) {
     clearTimeout(timeoutId);
     if (err.name === 'AbortError') {
-      throw new Error('Timeout: la solicitud tardó más de 15 segundos');
+      const secs = Math.round(timeoutMs / 1000);
+      throw new Error(`Timeout: la solicitud tardó más de ${secs} segundos`);
     }
     throw err;
   }
@@ -47,10 +48,11 @@ export const api = {
   stopStrategy: (id) => request(`/strategies/${id}/stop`, { method: 'POST' }),
   getStrategyLogs: (id, limit = 50) => request(`/strategies/${id}/logs?limit=${limit}`),
   configureAI: (data) => request('/ai/configure', { method: 'POST', body: JSON.stringify(data) }),
-  // Trading manual
+  // Trading manual — órdenes usan timeout extendido (45s) por latencia IOL
+  puedeOperar: () => request('/trading/puede-operar'),
   getQuote: (mercado, simbolo) => request('/trading/quote', { method: 'POST', body: JSON.stringify({ mercado, simbolo }) }),
-  placeOrder: (data) => request('/trading/order', { method: 'POST', body: JSON.stringify(data) }),
-  cancelOrder: (orderId) => request(`/trading/order/${orderId}`, { method: 'DELETE' }),
+  placeOrder: (data) => request('/trading/order', { method: 'POST', body: JSON.stringify(data) }, 45000),
+  cancelOrder: (orderId) => request(`/trading/order/${orderId}`, { method: 'DELETE' }, 45000),
   getTradingOperations: () => request('/trading/operations'),
   getPanel: (instrumento, panel) => request(`/trading/panel/${instrumento}/${panel}`),
   // Reconnect

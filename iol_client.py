@@ -190,29 +190,43 @@ class IOLClient:
         self, method: str, url: str, **kwargs
     ) -> Any:
         """
-        Ejecuta una petición HTTP con Exponential Backoff with Jitter
-        ante respuestas HTTP 429 (Too Many Requests), 502/503/504 o errores de red.
+        Ejecuta una petición HTTP con Exponential Backoff with Jitter.
+        - 429: reintenta siempre (rate limit genuino).
+        - 5xx en GET: reintenta (errores transitorios de market data).
+        - 5xx en POST/DELETE: NO reintenta — una orden fallida no debe reenviarse ciegamente.
         """
         import aiohttp
+        no_retry_on_5xx = method.upper() in ("POST", "DELETE")
+
         for attempt, (min_ms, max_ms) in enumerate(BACKOFF_RANGES, start=1):
             headers = {**self._auth_headers(), **kwargs.pop("headers", {})}
             try:
                 async with self._session.request(
                     method, url, headers=headers, **kwargs
                 ) as resp:
-                    if resp.status == 429 or resp.status >= 500:
-                        # Respetar Retry-After si viene en la respuesta o error de servidor
+                    if resp.status == 429:
                         retry_after = resp.headers.get("Retry-After")
-                        if retry_after and resp.status == 429:
-                            delay = float(retry_after)
-                        else:
-                            delay = random.randint(min_ms, max_ms) / 1000.0
+                        delay = float(retry_after) if retry_after else random.randint(min_ms, max_ms) / 1000.0
+                        logger.warning(
+                            "HTTP 429 – intento %d/%d. Esperando %.2f s…",
+                            attempt, MAX_RETRIES, delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+
+                    if resp.status >= 500:
+                        body = await resp.text()
+                        if no_retry_on_5xx:
+                            # Orden: fallar rápido, no reintentar
+                            raise IOLRequestError(
+                                f"IOL devolvió HTTP {resp.status} al procesar la orden. "
+                                f"Verificá tu panel de operaciones antes de reintentar. Detalle: {body[:200]}"
+                            )
+                        # GET: reintenta (error transitorio)
+                        delay = random.randint(min_ms, max_ms) / 1000.0
                         logger.warning(
                             "HTTP %d – intento %d/%d. Esperando %.2f s…",
-                            resp.status,
-                            attempt,
-                            MAX_RETRIES,
-                            delay,
+                            resp.status, attempt, MAX_RETRIES, delay,
                         )
                         await asyncio.sleep(delay)
                         continue
@@ -319,9 +333,89 @@ class IOLClient:
         return await self.get(f"/{mercado}/Titulos/{simbolo}")
 
     # ------------------------------------------------------------------ #
-    # Endpoints de trading  (operar/v2/Ordenes)
+    # Endpoints de trading  (endpoints oficiales documentados)
     # ------------------------------------------------------------------ #
 
+    def _validez_hoy(self) -> str:
+        """Retorna la validez del día de mercado: 17:00 ARG en ISO 8601 UTC."""
+        from datetime import datetime, timezone, timedelta
+        _TZ_ARG = timezone(timedelta(hours=-3))
+        now = datetime.now(tz=_TZ_ARG)
+        cierre = now.replace(hour=17, minute=0, second=0, microsecond=0)
+        # Si ya pasó el cierre, usar cierre de mañana
+        if now >= cierre:
+            cierre = cierre + timedelta(days=1)
+        return cierre.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    async def comprar(
+        self,
+        mercado:    str,
+        simbolo:    str,
+        precio:     float,
+        plazo:      str = "t0",
+        cantidad:   int | None = None,
+        monto:      float | None = None,
+        tipo_orden: str = "precioLimite",
+    ) -> dict:
+        """
+        Envía una orden de compra.
+        Endpoint: POST /api/v2/operar/Comprar
+
+        Proveer cantidad O monto (no ambos).
+        tipo_orden: "precioLimite" | "precioMercado"
+        """
+        payload: dict = {
+            "mercado":   mercado,
+            "simbolo":   simbolo,
+            "precio":    precio,
+            "plazo":     plazo,
+            "validez":   self._validez_hoy(),
+            "tipoOrden": tipo_orden,
+        }
+        if cantidad is not None:
+            payload["cantidad"] = cantidad
+        elif monto is not None:
+            payload["monto"] = monto
+        else:
+            raise ValueError("Debe proveer 'cantidad' o 'monto'.")
+        return await self.post("/operar/Comprar", json=payload)
+
+    async def vender(
+        self,
+        mercado:    str,
+        simbolo:    str,
+        cantidad:   int,
+        precio:     float,
+        plazo:      str = "t0",
+        tipo_orden: str = "precioLimite",
+    ) -> dict:
+        """
+        Envía una orden de venta.
+        Endpoint: POST /api/v2/operar/Vender
+        """
+        payload = {
+            "mercado":   mercado,
+            "simbolo":   simbolo,
+            "cantidad":  cantidad,
+            "precio":    precio,
+            "validez":   self._validez_hoy(),
+            "tipoOrden": tipo_orden,
+            "plazo":     plazo,
+        }
+        return await self.post("/operar/Vender", json=payload)
+
+    async def cancel_order(self, numero: int) -> dict:
+        """
+        Cancela una orden por su número de operación.
+        Endpoint: DELETE /api/v2/operaciones/{numero}
+        """
+        return await self.delete(f"/operaciones/{numero}")
+
+    async def get_order(self, order_id: int) -> dict:
+        """Estado actualizado de una orden por su ID."""
+        return await self.get(f"/operaciones/{order_id}")
+
+    # Backward-compat: place_order llama a comprar/vender internamente
     async def place_order(
         self,
         mercado:   str,
@@ -330,32 +424,17 @@ class IOLClient:
         cantidad:  int,
         precio:    float,
         plazo:     str = "t0",
-        validez:   str = "DIAVALIDEZ",
     ) -> dict:
+        """Compatibilidad con OMS. Delega a comprar() / vender()."""
+        if operacion == "compra":
+            return await self.comprar(mercado, simbolo, precio, plazo, cantidad=cantidad)
+        else:
+            return await self.vender(mercado, simbolo, cantidad, precio, plazo)
+
+    async def puede_operar(self) -> dict:
         """
-        Envía una orden limitada al mercado.
-
-        Parámetros
-        ----------
-        operacion : "compra" | "venta"
-        plazo     : "t0" (contado inmediato) | "t1" | "t2"
-        validez   : "DIAVALIDEZ" (válida hasta el cierre del día)
+        Verifica si la operatoria está habilitada para la cuenta.
+        Endpoint: GET /api/v2/operar/CPD/PuedeOperar
+        Retorna: {"operatoriaHabilitada": true/false}
         """
-        payload = {
-            "mercado":   mercado,
-            "simbolo":   simbolo,
-            "cantidad":  cantidad,
-            "precio":    precio,
-            "plazo":     plazo,
-            "validez":   validez,
-            "operacion": operacion,
-        }
-        return await self.post("/operar/v2/Ordenes", json=payload)
-
-    async def cancel_order(self, order_id: int) -> dict:
-        """Cancela una orden por su ID."""
-        return await self.delete(f"/operar/v2/Ordenes/{order_id}")
-
-    async def get_order(self, order_id: int) -> dict:
-        """Estado actualizado de una orden por su ID."""
-        return await self.get(f"/operaciones/{order_id}")
+        return await self.get("/operar/CPD/PuedeOperar")

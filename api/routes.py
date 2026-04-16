@@ -357,6 +357,18 @@ class ManualOrderRequest(BaseModel):
     precio: float
     plazo: str = "t0"
 
+@router.get("/trading/puede-operar")
+async def check_puede_operar() -> dict:
+    """Verifica si la operatoria está habilitada para la cuenta (GET /api/v2/operar/CPD/PuedeOperar)."""
+    engine = get_engine()
+    try:
+        result = await asyncio.wait_for(engine._client.puede_operar(), timeout=15.0)
+        return {"ok": True, "operatoriaHabilitada": result.get("operatoriaHabilitada", False), "raw": result}
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "IOL no respondió al verificar operatoria.")
+    except Exception as e:
+        raise HTTPException(400, f"Error al verificar operatoria: {str(e)}")
+
 @router.post("/trading/quote")
 async def manual_get_quote(req: ManualQuoteRequest) -> dict:
     """Cotización manual de cualquier instrumento."""
@@ -369,18 +381,25 @@ async def manual_get_quote(req: ManualQuoteRequest) -> dict:
 
 @router.post("/trading/order")
 async def manual_place_order(req: ManualOrderRequest) -> dict:
-    """Envía una orden manual al mercado."""
+    """Envía una orden manual al mercado. Timeout: 40s para no colgar al cliente."""
     engine = get_engine()
     try:
-        result = await engine._client.place_order(
-            mercado=req.mercado,
-            simbolo=req.simbolo,
-            operacion=req.operacion,
-            cantidad=req.cantidad,
-            precio=req.precio,
-            plazo=req.plazo,
+        result = await asyncio.wait_for(
+            engine._client.place_order(
+                mercado=req.mercado,
+                simbolo=req.simbolo,
+                operacion=req.operacion,
+                cantidad=req.cantidad,
+                precio=req.precio,
+                plazo=req.plazo,
+            ),
+            timeout=40.0,
         )
         return {"ok": True, "data": result}
+    except asyncio.TimeoutError:
+        logger.error("Timeout enviando orden a IOL (>40s): %s %s x%d @ %.2f",
+                     req.operacion, req.simbolo, req.cantidad, req.precio)
+        raise HTTPException(504, "IOL no respondió en 40s. La orden puede o no haberse enviado. Verificá tu panel de operaciones en IOL antes de reintentar.")
     except Exception as e:
         raise HTTPException(400, f"Error al enviar orden: {str(e)}")
 
@@ -389,8 +408,13 @@ async def manual_cancel_order(order_id: int) -> dict:
     """Cancela una orden manual."""
     engine = get_engine()
     try:
-        result = await engine._client.cancel_order(order_id)
+        result = await asyncio.wait_for(
+            engine._client.cancel_order(order_id),
+            timeout=40.0,
+        )
         return {"ok": True, "data": result}
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "IOL no respondió en 40s al cancelar la orden. Verificá tu panel en IOL.")
     except Exception as e:
         raise HTTPException(400, f"Error al cancelar orden: {str(e)}")
 

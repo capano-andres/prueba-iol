@@ -22,6 +22,10 @@ export default function Trading() {
   const [orderResult, setOrderResult] = useState(null);
   const [orderError, setOrderError] = useState(null);
 
+  // PuedeOperar
+  const [puedeOperar, setPuedeOperar] = useState(null);  // null=cargando, true/false
+  const [checkingOperar, setCheckingOperar] = useState(false);
+
   // Operations
   const [operations, setOperations] = useState([]);
   const [loadingOps, setLoadingOps] = useState(false);
@@ -53,7 +57,9 @@ export default function Trading() {
     setLoadingOps(true);
     try {
       const res = await api.getTradingOperations();
-      setOperations(Array.isArray(res.data) ? res.data.slice(0, 20) : []);
+      const ops = Array.isArray(res.data) ? res.data.slice(0, 20) : [];
+      if (ops.length > 0) console.log('[Operaciones] Ejemplo:', ops[0]);
+      setOperations(ops);
     } catch {
       // silent
     } finally {
@@ -61,10 +67,25 @@ export default function Trading() {
     }
   }, []);
 
+  const checkPuedeOperar = useCallback(async () => {
+    setCheckingOperar(true);
+    try {
+      const res = await api.puedeOperar();
+      console.log('[PuedeOperar] Respuesta:', res);
+      setPuedeOperar(res.operatoriaHabilitada ?? false);
+    } catch (err) {
+      console.error('[PuedeOperar] Error:', err);
+      setPuedeOperar(null);
+    } finally {
+      setCheckingOperar(false);
+    }
+  }, []);
+
   // Initial load
   useEffect(() => {
     fetchQuote();
     fetchOperations();
+    checkPuedeOperar();
   }, []);
 
   // Auto-refresh quote every 10s
@@ -141,6 +162,41 @@ export default function Trading() {
       {/* ── Buscador ─────────────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: '1.5rem', fontWeight: 700 }}>📈 Trading Manual</h1>
+        {/* Badge PuedeOperar */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          {checkingOperar ? (
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>⏳ Verificando operatoria...</span>
+          ) : puedeOperar === true ? (
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+              padding: '0.25rem 0.65rem', borderRadius: '99px', fontSize: '0.75rem', fontWeight: 600,
+              background: 'rgba(0,217,126,0.12)', color: 'var(--color-profit)',
+              border: '1px solid rgba(0,217,126,0.3)'
+            }}>✅ Operatoria Habilitada</span>
+          ) : puedeOperar === false ? (
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+              padding: '0.25rem 0.65rem', borderRadius: '99px', fontSize: '0.75rem', fontWeight: 600,
+              background: 'rgba(255,59,92,0.12)', color: 'var(--color-loss)',
+              border: '1px solid rgba(255,59,92,0.3)'
+            }}>🚫 Operatoria Bloqueada</span>
+          ) : (
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+              padding: '0.25rem 0.65rem', borderRadius: '99px', fontSize: '0.75rem', fontWeight: 600,
+              background: 'rgba(255,193,7,0.12)', color: 'var(--color-warning)',
+              border: '1px solid rgba(255,193,7,0.3)'
+            }}>⚠️ Estado desconocido</span>
+          )}
+          <button
+            className="btn btn--ghost btn--sm"
+            onClick={checkPuedeOperar}
+            disabled={checkingOperar}
+            title="Verificar estado de operatoria IOL"
+          >
+            🔄
+          </button>
+        </div>
       </div>
 
       {/* Quick Tickers */}
@@ -498,15 +554,19 @@ export default function Trading() {
                           {op.fechaOperada ? new Date(op.fechaOperada).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-'}
                         </td>
                         <td>
-                          {op.estado === 'pendiente' && (
-                            <button
-                              className="btn btn--danger btn--sm"
-                              onClick={() => handleCancelOrder(op.numero)}
-                              style={{ padding: '0.2rem 0.4rem', fontSize: '0.7rem' }}
-                            >
-                              ✕
-                            </button>
-                          )}
+                          {(() => {
+                            const estado = (op.estado || '').toLowerCase();
+                            const esFinal = ['terminada', 'cancelada', 'rechazada', 'anulada'].includes(estado);
+                            return !esFinal && (
+                              <button
+                                className="btn btn--danger btn--sm"
+                                onClick={() => handleCancelOrder(op.numero)}
+                                style={{ padding: '0.2rem 0.4rem', fontSize: '0.7rem' }}
+                              >
+                                ✕
+                              </button>
+                            );
+                          })()}
                         </td>
                       </tr>
                     );
