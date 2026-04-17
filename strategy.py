@@ -83,9 +83,11 @@ class Strategy:
 
     # ── API pública ───────────────────────────────────────────────────────
 
-    def evaluar(self, pricings: list[OptionPricing]) -> list[TradeSignal]:
+    def evaluar(self, pricings: list[OptionPricing]) -> tuple[list[TradeSignal], dict]:
         """
-        Evalúa la lista de OptionPricing y retorna señales ordenadas por score.
+        Evalúa la lista de OptionPricing y retorna (señales, stats).
+        - señales: ordenadas por score descendente.
+        - stats: contadores de filtros para diagnóstico en UI.
         No ejecuta ninguna orden — solo analiza.
         """
         signals: list[TradeSignal] = []
@@ -105,7 +107,7 @@ class Strategy:
 
         signals.sort(key=lambda s: s.score, reverse=True)
 
-        # Log ultra-verboso
+        # Log ultra-verboso (terminal)
         logger.info(
             "📊 Mispricing eval: %d opciones | Señales=%d | "
             "Filtradas → sin_puntas=%d, spread=%d, dte=%d, sin_iv=%d, delta=%d, mispricing=%d (near_miss=%d)",
@@ -119,7 +121,7 @@ class Strategy:
                 s.lado, s.pricing.quote.simbolo, s.score, s.precio_limite, s.razon,
             )
 
-        return signals
+        return signals, stats
 
     async def ejecutar_signals(self, signals: list[TradeSignal]) -> None:
         """Ejecuta señales en orden de score respetando el límite de posiciones."""
@@ -161,7 +163,7 @@ class Strategy:
         if not pricings:
             return
 
-        signals = self.evaluar(pricings)
+        signals, _ = self.evaluar(pricings)
 
         if signals:
             logger.info(

@@ -18,13 +18,14 @@ from typing import Any
 from dotenv import load_dotenv
 
 from iol_client import IOLClient
-from market_data import MarketDataFeed, MarketSnapshot
+from market_data import MarketDataFeed, MarketSnapshot, StockDataFeed, StockSnapshot
 from math_engine import DEFAULT_RISK_FREE_RATE, enrich_snapshot, bsm_greeks
 from oms import OMS, IOLProfile, PositionStatus
 from strategy import Strategy, StrategyConfig
 from strategy_bull_spread import BullCallSpreadStrategy, BullSpreadConfig
 from strategy_long_directional import LongDirectionalStrategy, LongDirectionalConfig
 from strategy_daytrading import DaytradingStrategy, DaytradingConfig
+from strategy_acciones_ema import AccionesEMAStrategy, AccionesEMAConfig
 import db
 
 logger = logging.getLogger(__name__)
@@ -120,7 +121,46 @@ STRATEGY_TYPES = {
             {"key": "max_drawdown_ars",   "label": "Stop Loss Global (ARS)", "type": "int", "default": 0,    "descripcion": "Corta todo si la pérdida acumulada supera este monto."},
         ],
     },
+    "acciones_ema": {
+        "nombre": "Acciones EMA + RSI",
+        "descripcion": (
+            "Opera directamente sobre acciones argentinas (bCBA) usando cruce de EMAs "
+            "y RSI como filtro. Compra en Golden Cross, vende en Death Cross o al activarse SL/TP. "
+            "Solo posiciones LONG — sin venta en descubierto."
+        ),
+        "params": [
+            {"key": "ema_rapida",         "label": "EMA Rápida",            "type": "int",    "default": 9,          "descripcion": "Períodos EMA rápida. Cada período = 1 snapshot (~30s)."},
+            {"key": "ema_lenta",          "label": "EMA Lenta",             "type": "int",    "default": 21,         "descripcion": "Períodos EMA lenta. 21 snapshots ≈ 10.5 min de warmup hasta operar."},
+            {"key": "rsi_periodos",       "label": "RSI Períodos",          "type": "int",    "default": 14,         "descripcion": "Períodos para el RSI."},
+            {"key": "rsi_overbought",     "label": "RSI Sobrecompra",       "type": "int",    "default": 70,         "descripcion": "No comprar si RSI supera este nivel."},
+            {"key": "rsi_oversold",       "label": "RSI Sobreventa",        "type": "int",    "default": 30,         "descripcion": "No comprar si RSI cae por debajo de este nivel."},
+            {"key": "stop_loss_pct",      "label": "Stop Loss %",           "type": "float",  "default": 0.05,       "descripcion": "Vender si el precio cae este %. Ej: 0.05 = -5%."},
+            {"key": "take_profit_pct",    "label": "Take Profit %",         "type": "float",  "default": 0.10,       "descripcion": "Vender si el precio sube este %. Ej: 0.10 = +10%."},
+            {"key": "modo_cantidad",      "label": "Modo Dimensionamiento", "type": "string", "default": "cantidad", "descripcion": "'cantidad' = N acciones fijas por trade. 'monto' = monto ARS fijo (calcula automáticamente cuántas acciones comprar al precio actual)."},
+            {"key": "cantidad_acciones",  "label": "Cantidad Acciones",     "type": "int",    "default": 1,          "descripcion": "Acciones a comprar por trade (solo si modo=cantidad)."},
+            {"key": "monto_por_trade",    "label": "Monto por Trade (ARS)", "type": "float",  "default": 50000,      "descripcion": "ARS a invertir por trade (solo si modo=monto). Calcula la cantidad al precio actual."},
+            {"key": "max_posiciones",     "label": "Max Posiciones",        "type": "int",    "default": 1,          "descripcion": "Máximo de posiciones abiertas simultáneas."},
+            {"key": "cooldown_snapshots", "label": "Cooldown (snapshots)",  "type": "int",    "default": 3,          "descripcion": "Snapshots de espera post-cierre antes de abrir otra posición."},
+            {"key": "force_close_eod",    "label": "Cierre EOD 16:45",      "type": "bool",   "default": True,       "descripcion": "Cerrar todas las posiciones a las 16:45 para evitar quedar posicionado overnight."},
+            {"key": "max_drawdown_ars",   "label": "Stop Loss Global (ARS)","type": "int",    "default": 0,          "descripcion": "Corta todo si la pérdida acumulada supera este monto. 0 = sin límite."},
+        ],
+    },
 }
+
+# Inyectar auto_restart en todos los tipos (parámetro global de infraestructura)
+_AUTO_RESTART_PARAM = {
+    "key": "auto_restart",
+    "label": "Auto-Restart al iniciar servidor",
+    "type": "bool",
+    "default": False,
+    "descripcion": (
+        "Si está activado, la estrategia se arrancará automáticamente cada vez que "
+        "se inicie el servidor. Útil para operaciones que deben correr todos los días sin intervención manual."
+    ),
+}
+for _t in STRATEGY_TYPES.values():
+    if not any(p["key"] == "auto_restart" for p in _t["params"]):
+        _t["params"].append(_AUTO_RESTART_PARAM)
 
 
 # ─── StrategySlot ────────────────────────────────────────────────────────────
@@ -169,24 +209,39 @@ class StrategySlot:
         nominal_en_uso = 0.0
         net_delta = 0.0
         net_vega = 0.0
-        spot = self.last_snapshot.spot if self.last_snapshot else None
+
+        # Determinar spot según tipo de snapshot
+        snap = self.last_snapshot
+        if snap is None:
+            spot = None
+        elif hasattr(snap, "opciones"):
+            # MarketSnapshot (opciones)
+            spot = snap.spot
+        else:
+            # StockSnapshot
+            spot = getattr(snap, "precio", None)
 
         if oms:
             for p in oms.posiciones_abiertas():
                 mid = None
                 opt_quote = None
-                if self.last_snapshot:
-                    for opt in self.last_snapshot.opciones:
+
+                if snap is not None and hasattr(snap, "opciones"):
+                    # Solo buscar mid en cadena de opciones para estrategias de opciones
+                    for opt in snap.opciones:
                         if opt.simbolo == p.simbolo:
                             mid = opt.mid
                             opt_quote = opt
                             break
-                            
+                elif snap is not None and not hasattr(snap, "opciones"):
+                    # Para acciones: el mid es el precio de la acción
+                    mid = spot
+
                 pnl_nr = p.pnl_no_realizado(mid) if mid else None
                 if pnl_nr is not None:
                     pnl_no_realizado_total += pnl_nr
 
-                # Calcular Griegas Activas para esta posición
+                # Calcular Griegas Activas para esta posición (solo opciones)
                 pos_delta = None
                 pos_vega = None
                 if opt_quote and spot and spot > 0:
@@ -207,7 +262,7 @@ class StrategySlot:
                                 net_vega += pos_vega
                     except Exception:
                         pass
-                
+
                 positions_open.append({
                     "id": p.id,
                     "simbolo": p.simbolo,
@@ -220,6 +275,7 @@ class StrategySlot:
                 })
                 nominal_en_uso += p.precio_apertura * p.cantidad
             pnl_realizado = oms.pnl_realizado_total()
+
 
         return {
             "id": self.id,
@@ -286,6 +342,7 @@ class TradingEngine:
 
         # Cargar slots guardados como stopped
         saved = await db.load_all_slots()
+        slots_to_autostart = []
         for s in saved:
             slot = StrategySlot(
                 id=s["id"],
@@ -303,8 +360,27 @@ class TradingEngine:
             self._slots[slot.id] = slot
             logger.info("Slot cargado: %s (%s)", slot.nombre, slot.id)
 
+            # Marcar para auto-restart si estaba corriendo y tiene el flag activo
+            if slot.config.get("auto_restart", False):
+                slots_to_autostart.append(slot.id)
+
         self._initialized = True
         logger.info("TradingEngine inicializado con %d slots.", len(self._slots))
+
+        # Auto-restart de estrategias configuradas para ello
+        for slot_id in slots_to_autostart:
+            try:
+                s = self._slots[slot_id]
+                logger.info(
+                    "Auto-restart activado: arrancando '%s' (%s)...",
+                    s.nombre, slot_id,
+                )
+                await self.start_strategy(slot_id)
+            except Exception as exc:
+                logger.error(
+                    "Error en auto-restart de slot %s: %s", slot_id, exc
+                )
+
 
     async def shutdown(self) -> None:
         """Detiene todo y cierra la conexión a IOL."""
@@ -491,18 +567,35 @@ class TradingEngine:
 
         feed_key = f"{slot.mercado}:{slot.activo}"
 
-        # Crear o reutilizar feed
-        if feed_key not in self._feeds:
-            feed = MarketDataFeed(
-                self._client,
-                mercado=slot.mercado,
-                subyacente=slot.activo,
-                interval=30.0,
-            )
-            self._feeds[feed_key] = feed
-            await feed.start()
-            slot.add_log("INFO", f"Feed de mercado iniciado: {slot.activo}")
-        feed = self._feeds[feed_key]
+        # ── Para acciones_ema usamos StockDataFeed (liviano, solo get_quote)
+        if slot.tipo_estrategia == "acciones_ema":
+            stock_feed_key = f"stock:{slot.mercado}:{slot.activo}"
+            if stock_feed_key not in self._feeds:
+                stock_feed = StockDataFeed(
+                    self._client,
+                    simbolo=slot.activo,
+                    mercado=slot.mercado,
+                    interval=30.0,
+                )
+                self._feeds[stock_feed_key] = stock_feed
+                await stock_feed.start()
+                slot.add_log("INFO", f"Feed de acciones iniciado: {slot.activo}")
+            feed = self._feeds[stock_feed_key]
+            slot._feed_key = stock_feed_key
+        else:
+            # Crear o reutilizar feed de opciones
+            if feed_key not in self._feeds:
+                feed = MarketDataFeed(
+                    self._client,
+                    mercado=slot.mercado,
+                    subyacente=slot.activo,
+                    interval=30.0,
+                )
+                self._feeds[feed_key] = feed
+                await feed.start()
+                slot.add_log("INFO", f"Feed de mercado iniciado: {slot.activo}")
+            feed = self._feeds[feed_key]
+            slot._feed_key = feed_key
 
         # Crear OMS para este slot
         profile = IOLProfile.GOLD   # TODO: hacer configurable
@@ -534,6 +627,12 @@ class TradingEngine:
                 if k in DaytradingConfig.__dataclass_fields__
             })
             strategy = DaytradingStrategy(oms, dt_cfg)
+        elif slot.tipo_estrategia == "acciones_ema":
+            ae_cfg = AccionesEMAConfig(**{
+                k: v for k, v in slot.config.items()
+                if k in AccionesEMAConfig.__dataclass_fields__
+            })
+            strategy = AccionesEMAStrategy(oms, ae_cfg)
         else:
             # default: options_mispricing
             cfg = StrategyConfig(**{
@@ -653,13 +752,46 @@ class TradingEngine:
 
                 # Serializar indicadores y señal para la UI
                 indicators = dt._last_indicators
-                if indicators:
+                if not indicators:
+                    # Durante warmup: mostrar progreso en la UI
+                    min_data = max(dt._config.ema_lenta, dt._config.rsi_periodos + 1)
+                    pts = len(dt._price_history)
+                    remaining = min_data - pts
+                    eta_min = (remaining * 30) / 60
                     _slot.add_log("INFO",
-                        f"EMA{dt._config.ema_rapida}={indicators.get('ema_fast', '?')} "
-                        f"EMA{dt._config.ema_lenta}={indicators.get('ema_slow', '?')} "
-                        f"RSI={indicators.get('rsi', '?')} "
-                        f"Data={indicators.get('data_points', 0)} pts"
+                        f"⏳ WARMUP {pts}/{min_data} snapshots — faltan ~{remaining} ticks (~{eta_min:.1f} min) "
+                        f"para calcular EMA{dt._config.ema_rapida}/EMA{dt._config.ema_lenta}"
                     )
+                else:
+                    ema_fast  = indicators.get('ema_fast', 0)
+                    ema_slow  = indicators.get('ema_slow', 0)
+                    rsi       = indicators.get('rsi', 0)
+                    spot_now  = indicators.get('spot', 0)
+                    diff      = ema_fast - ema_slow
+                    diff_pct  = (diff / spot_now * 100) if spot_now else 0
+
+                    # Clasificar estado del cruce
+                    if diff > 0:
+                        trend_icon = "📈"
+                        trend_label = "ALCISTA (EMA rápida arriba)"
+                    else:
+                        trend_icon = "📉"
+                        trend_label = "BAJISTA (EMA rápida abajo)"
+
+                    # Detectar si hay cruce inmiente (diff pequeño)
+                    proximity = ""
+                    if spot_now and abs(diff_pct) < 0.10:
+                        proximity = " 🔄 CRUCE INMINENTE!"
+                    elif spot_now and abs(diff_pct) < 0.20:
+                        proximity = " ⚠️ EMAs convergiendo"
+
+                    _slot.add_log("INFO",
+                        f"{trend_icon} EMA{dt._config.ema_rapida}={ema_fast:.2f} "
+                        f"EMA{dt._config.ema_lenta}={ema_slow:.2f} "
+                        f"diff={diff:+.2f} ({diff_pct:+.2f}%) "
+                        f"RSI={rsi:.1f} — {trend_label}{proximity}"
+                    )
+
                 if dt._last_signal:
                     sig = dt._last_signal
                     _slot.last_signals = [{
@@ -670,11 +802,12 @@ class TradingEngine:
                         "score": round(sig.score, 4),
                     }]
 
+
             else:
                 # options_mispricing (default)
                 pricings = enrich_snapshot(snapshot, r=DEFAULT_RISK_FREE_RATE)
                 if pricings:
-                    signals = _slot._strategy.evaluar(pricings)
+                    signals, stats = _slot._strategy.evaluar(pricings)
                     _slot.last_signals = [
                         {
                             "simbolo": s.pricing.quote.simbolo,
@@ -687,10 +820,29 @@ class TradingEngine:
                     ]
                     if signals:
                         _slot.add_log("INFO",
-                            f"{len(signals)} señales encontradas. Top: {signals[0].pricing.quote.simbolo} "
+                            f"✅ {len(signals)} señal(es). Top: {signals[0].pricing.quote.simbolo} "
                             f"{signals[0].lado} score={signals[0].score:.3f}"
                         )
                         await _slot._strategy.ejecutar_signals(signals)
+                    else:
+                        # Mostrar breakdown de filtros en UI para diagnóstico
+                        total = stats.get('total', 0)
+                        if stats.get('sin_puntas', 0) == total:
+                            _slot.add_log("WARNING",
+                                f"🚫 Sin puntas: las {total} opciones tienen bid/ask=null — ¿fuera de horario?"
+                            )
+                        else:
+                            partes = []
+                            if stats.get('sin_puntas'):  partes.append(f"sin_puntas={stats['sin_puntas']}")
+                            if stats.get('spread'):      partes.append(f"spread={stats['spread']}")
+                            if stats.get('dte'):         partes.append(f"dte={stats['dte']}")
+                            if stats.get('sin_iv'):      partes.append(f"sin_iv={stats['sin_iv']}")
+                            if stats.get('delta'):       partes.append(f"delta={stats['delta']}")
+                            if stats.get('mispricing'):  partes.append(f"mispricing<{int(_slot.config.get('min_mispricing_pct',0.05)*100)}%={stats['mispricing']}")
+                            if stats.get('near_miss'):   partes.append(f"🔸 near_miss={stats['near_miss']}")
+                            _slot.add_log("INFO",
+                                f"📊 {total} opciones — sin señales. Filtrados: {', '.join(partes) or 'ninguno'}"
+                            )
 
             # Broadcast a WebSocket
             await self._broadcast({
@@ -700,7 +852,98 @@ class TradingEngine:
             })
 
         slot._snapshot_callback = _on_snapshot
-        feed.on_snapshot(_on_snapshot)
+
+        # ── Para acciones_ema registramos un callback dedicado en el StockDataFeed
+        if slot.tipo_estrategia == "acciones_ema":
+            ae: AccionesEMAStrategy = slot._strategy  # type: ignore[assignment]
+
+            async def _on_stock_snapshot(stock_snap: StockSnapshot, _slot=slot) -> None:
+                if _slot.estado != "running":
+                    return
+
+                # Max Drawdown global
+                max_drawdown = _slot.config.get("max_drawdown_ars", 0)
+                if max_drawdown > 0:
+                    slot_info = _slot.to_dict()
+                    unrealized = sum(p.get("pnl_no_realizado") or 0 for p in slot_info.get("posiciones_abiertas", []))
+                    realized   = slot_info.get("pnl_realizado", 0)
+                    if (realized + unrealized) <= -max_drawdown:
+                        _slot.add_log("CRITICAL",
+                            f"⚠️ GLOBAL STOP LOSS: P&L {realized+unrealized:.2f} <= -{max_drawdown} ARS. Apagando..."
+                        )
+                        asyncio.create_task(self.stop_strategy(_slot.id))
+                        return
+
+                # EOD: cierre forzado a las 16:45
+                from datetime import datetime, time, timezone, timedelta
+                _TZ_ARG = timezone(timedelta(hours=-3))
+                now_arg = datetime.now(tz=_TZ_ARG).time()
+                _ae: AccionesEMAStrategy = _slot._strategy  # type: ignore[assignment]
+                if _ae._config.force_close_eod and time(16, 45) <= now_arg < time(17, 0):
+                    await _ae.cerrar_todos(stock_snap)
+                else:
+                    await _ae.on_snapshot(stock_snap)
+
+                # Serializar indicadores para la UI
+                indicators = _ae._last_indicators
+                precio_actual = stock_snap.precio or 0
+
+                if not indicators:
+                    min_data = max(_ae._config.ema_lenta, _ae._config.rsi_periodos + 1)
+                    pts = len(_ae._price_history)
+                    remaining = min_data - pts
+                    eta_min = (remaining * 30) / 60
+                    _slot.add_log("INFO",
+                        f"⏳ WARMUP {pts}/{min_data} — faltan ~{remaining} ticks (~{eta_min:.1f} min) "
+                        f"para calcular EMA{_ae._config.ema_rapida}/EMA{_ae._config.ema_lenta} "
+                        f"| {stock_snap.simbolo}={precio_actual:.2f}"
+                    )
+                else:
+                    ema_fast = indicators.get("ema_fast", 0)
+                    ema_slow = indicators.get("ema_slow", 0)
+                    rsi      = indicators.get("rsi", 0)
+                    diff     = ema_fast - ema_slow
+                    diff_pct = (diff / precio_actual * 100) if precio_actual else 0
+
+                    trend_icon  = "📈" if diff > 0 else "📉"
+                    trend_label = "ALCISTA" if diff > 0 else "BAJISTA"
+                    proximity   = ""
+                    if precio_actual and abs(diff_pct) < 0.10:
+                        proximity = " 🔄 CRUCE INMINENTE!"
+                    elif precio_actual and abs(diff_pct) < 0.20:
+                        proximity = " ⚠️ EMAs convergiendo"
+
+                    _slot.add_log("INFO",
+                        f"{trend_icon} {stock_snap.simbolo}=${precio_actual:.2f} | "
+                        f"EMA{_ae._config.ema_rapida}={ema_fast:.2f} "
+                        f"EMA{_ae._config.ema_lenta}={ema_slow:.2f} "
+                        f"diff={diff:+.2f}({diff_pct:+.2f}%) "
+                        f"RSI={rsi:.1f} — {trend_label}{proximity}"
+                    )
+
+                # Actualizar señal en UI
+                if _ae._last_signal:
+                    sig = _ae._last_signal
+                    _slot.last_signals = [{
+                        "simbolo": sig.simbolo,
+                        "lado": "COMPRA ACCION",
+                        "precio": sig.precio_limite,
+                        "razon": sig.razon,
+                        "score": round(sig.score, 4),
+                    }]
+
+                # Broadcast WebSocket
+                await self._broadcast({
+                    "type": "snapshot",
+                    "slot_id": _slot.id,
+                    "data": _slot.to_dict(),
+                })
+
+            slot._snapshot_callback = _on_stock_snapshot
+            feed.on_snapshot(_on_stock_snapshot)
+        else:
+            feed.on_snapshot(_on_snapshot)
+
 
         slot.estado = "running"
         mode = "DRY-RUN" if slot.dry_run else "LIVE"

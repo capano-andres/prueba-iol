@@ -1,0 +1,15 @@
+[Unit]
+Description=IOL Trading Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/ruta/a/tu/app/Conexion IOL
+ExecStart=/ruta/a/tu/venv/bin/python server.py
+Restart=always
+RestartSec=10
+EnvironmentFile=/ruta/a/tu/app/Conexion IOL/.env
+
+[Install]
+WantedBy=multi-user.target

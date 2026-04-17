@@ -1,6 +1,7 @@
 """
 Módulo 2: Market Data
 - Polling de la cadena de opciones GGAL (configurable)
+- Polling de cotización de acciones argentinas (StockDataFeed)
 - Parser de tickers ByMA  →  tipo / strike / vencimiento
 - Snapshots tipados para consumir desde el Motor Matemático (M3) y el OMS (M4)
 """
@@ -398,3 +399,157 @@ class MarketDataFeed:
         if isinstance(raw, dict):
             raw = raw.get("opciones") or raw.get("items") or [raw]
         return raw if isinstance(raw, list) else []
+
+
+# ─── StockSnapshot ───────────────────────────────────────────────────────────
+
+@dataclass(slots=True)
+class StockSnapshot:
+    """Cotización instantánea de una acción (sin opciones)."""
+    ts:      datetime
+    simbolo: str
+    precio:  float | None   # último precio negociado
+    bid:     float | None
+    ask:     float | None
+    volumen: int   | None
+
+    @property
+    def mid(self) -> float | None:
+        """Precio medio bid/ask; fallback al último precio."""
+        if self.bid and self.ask and self.bid > 0 and self.ask > 0:
+            return (self.bid + self.ask) / 2.0
+        return self.precio
+
+
+# ─── StockDataFeed ───────────────────────────────────────────────────────────
+
+StockCallback = Callable[[StockSnapshot], Awaitable[None]]
+
+
+class StockDataFeed:
+    """
+    Servicio de polling de la cotización de una acción argentina (bCBA).
+
+    Mucho más liviano que MarketDataFeed: solo llama a get_quote() cada N segundos
+    sin descargar la cadena de opciones completa.
+
+    Uso típico:
+        feed = StockDataFeed(client, simbolo="GGAL", interval=30.0)
+        feed.on_snapshot(mi_handler)
+        await feed.start()
+    """
+
+    def __init__(
+        self,
+        client:   IOLClient,
+        simbolo:  str,
+        mercado:  str   = "bCBA",
+        interval: float = 30.0,
+    ) -> None:
+        self._client   = client
+        self._simbolo  = simbolo
+        self._mercado  = mercado
+        self._interval = interval
+        self._callbacks: list[StockCallback] = []
+        self._task: asyncio.Task | None = None
+        self._running = False
+        self._last_snapshot: StockSnapshot | None = None
+
+    # ── API pública ──────────────────────────────────────────────────────
+
+    def on_snapshot(self, callback: StockCallback) -> None:
+        self._callbacks.append(callback)
+
+    def remove_callback(self, callback: StockCallback) -> None:
+        try:
+            self._callbacks.remove(callback)
+        except ValueError:
+            pass
+
+    async def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        self._task = asyncio.create_task(
+            self._poll_loop(), name=f"stock_feed_{self._simbolo}"
+        )
+        logger.info(
+            "StockDataFeed iniciado — %s/%s cada %.1f s.",
+            self._mercado, self._simbolo, self._interval,
+        )
+
+    async def stop(self) -> None:
+        self._running = False
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        logger.info("StockDataFeed %s detenido.", self._simbolo)
+
+    @property
+    def last_snapshot(self) -> StockSnapshot | None:
+        return self._last_snapshot
+
+    # ── Loop interno ─────────────────────────────────────────────────────
+
+    async def _poll_loop(self) -> None:
+        while self._running:
+            t0 = asyncio.get_event_loop().time()
+            try:
+                snapshot = await self._fetch_snapshot()
+                self._last_snapshot = snapshot
+                for cb in self._callbacks:
+                    try:
+                        await cb(snapshot)
+                    except Exception as exc:
+                        logger.error(
+                            "StockDataFeed: error en callback para %s: %s",
+                            self._simbolo, exc,
+                        )
+            except IOLRequestError as exc:
+                logger.warning(
+                    "StockDataFeed: error de API obteniendo %s: %s",
+                    self._simbolo, exc,
+                )
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.exception(
+                    "StockDataFeed: error inesperado en %s: %s",
+                    self._simbolo, exc,
+                )
+
+            elapsed = asyncio.get_event_loop().time() - t0
+            await asyncio.sleep(max(0.0, self._interval - elapsed))
+
+    async def _fetch_snapshot(self) -> StockSnapshot:
+        """Obtiene la cotización actual de la acción."""
+        data = await self._client.get_quote(self._mercado, self._simbolo)
+
+        precio  = _float_or_none(data.get("ultimoPrecio") or data.get("ultimo"))
+        volumen = _int_or_none(data.get("volumenNominal") or data.get("volumen"))
+
+        bid = ask = None
+        puntas = data.get("puntas")
+        if isinstance(puntas, list) and puntas:
+            bid = _float_or_none(puntas[0].get("precioCompra"))
+            ask = _float_or_none(puntas[0].get("precioVenta"))
+        elif isinstance(puntas, dict):
+            bid = _float_or_none(puntas.get("precioCompra"))
+            ask = _float_or_none(puntas.get("precioVenta"))
+
+        logger.info(
+            "📡 Stock %s: precio=%s bid=%s ask=%s vol=%s",
+            self._simbolo, precio, bid, ask, volumen,
+        )
+
+        return StockSnapshot(
+            ts=datetime.now(),
+            simbolo=self._simbolo,
+            precio=precio,
+            bid=bid,
+            ask=ask,
+            volumen=volumen,
+        )
