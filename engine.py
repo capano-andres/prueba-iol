@@ -25,6 +25,7 @@ from strategy import Strategy, StrategyConfig
 from strategy_bull_spread import BullCallSpreadStrategy, BullSpreadConfig
 from strategy_long_directional import LongDirectionalStrategy, LongDirectionalConfig
 from strategy_daytrading import DaytradingStrategy, DaytradingConfig
+from strategy_rsi_options import RsiOptionsStrategy, RsiOptionsConfig
 from strategy_acciones_ema import AccionesEMAStrategy, AccionesEMAConfig
 import db
 
@@ -119,6 +120,30 @@ STRATEGY_TYPES = {
             {"key": "cooldown_snapshots", "label": "Cooldown (snapshots)",  "type": "int",   "default": 5,    "descripcion": "Snapshots de espera post-cierre antes de abrir otra posición (~2.5 min)."},
             {"key": "force_intraday_close", "label": "Cierre Intradiario", "type": "bool",  "default": True,  "descripcion": "Forzar cierre total a las 16:45 para bonificación IOL."},
             {"key": "max_drawdown_ars",   "label": "Stop Loss Global (ARS)", "type": "int", "default": 0,    "descripcion": "Corta todo si la pérdida acumulada supera este monto."},
+        ],
+    },
+    "rsi_options": {
+        "nombre": "RSI Options (Solo RSI)",
+        "descripcion": (
+            "Compra PUTs cuando el RSI supera el umbral de sobrecompra y "
+            "CALLs cuando cae bajo el umbral de sobreventa. "
+            "Sin EMA — señales más frecuentes que Daytrading. Solo compra opciones, nunca lanza."
+        ),
+        "params": [
+            {"key": "rsi_periodos",       "label": "RSI Períodos",          "type": "int",   "default": 14,   "descripcion": "Períodos para calcular el RSI. Cada período = 1 snapshot (~30s)."},
+            {"key": "rsi_overbought",     "label": "RSI Sobrecompra",       "type": "float", "default": 70.0, "descripcion": "RSI por encima de este nivel → comprar PUT (mercado recalentado)."},
+            {"key": "rsi_oversold",       "label": "RSI Sobreventa",        "type": "float", "default": 30.0, "descripcion": "RSI por debajo de este nivel → comprar CALL (mercado colapsado)."},
+            {"key": "target_delta",       "label": "Delta Objetivo",        "type": "float", "default": 0.50, "descripcion": "Delta absoluto para seleccionar opción. 0.50 = ATM (At The Money)."},
+            {"key": "min_dte",            "label": "Min DTE",               "type": "int",   "default": 5,    "descripcion": "Días mínimos al vencimiento."},
+            {"key": "max_dte",            "label": "Max DTE",               "type": "int",   "default": 45,   "descripcion": "Días máximos al vencimiento."},
+            {"key": "max_spread_pct",     "label": "Max Spread Bid-Ask",    "type": "float", "default": 0.25, "descripcion": "Spread bid-ask máximo tolerable. Ejemplo: 0.25 = 25%."},
+            {"key": "stop_loss_pct",      "label": "Stop Loss %",           "type": "float", "default": 0.20, "descripcion": "Vender si la prima cae este %. Ejemplo: 0.20 = vender si pierde -20%."},
+            {"key": "take_profit_pct",    "label": "Take Profit %",         "type": "float", "default": 0.40, "descripcion": "Vender si la prima sube este %. Ejemplo: 0.40 = tomar ganancia al +40%."},
+            {"key": "lotes_por_trade",    "label": "Lotes por Trade",       "type": "int",   "default": 1,    "descripcion": "Contratos a comprar por señal."},
+            {"key": "max_posiciones",     "label": "Max Posiciones",        "type": "int",   "default": 2,    "descripcion": "Máximo de posiciones abiertas simultáneas."},
+            {"key": "cooldown_snapshots", "label": "Cooldown (snapshots)",  "type": "int",   "default": 5,    "descripcion": "Snapshots de espera post-entrada antes de volver a operar (~2.5 min)."},
+            {"key": "force_intraday_close", "label": "Cierre Intradiario", "type": "bool",  "default": True,  "descripcion": "Forzar cierre total a las 16:45 para bonificación IOL."},
+            {"key": "max_drawdown_ars",   "label": "Stop Loss Global (ARS)", "type": "int", "default": 0,    "descripcion": "Corta todo si la pérdida acumulada supera este monto. 0 = sin límite."},
         ],
     },
     "acciones_ema": {
@@ -627,6 +652,12 @@ class TradingEngine:
                 if k in DaytradingConfig.__dataclass_fields__
             })
             strategy = DaytradingStrategy(oms, dt_cfg)
+        elif slot.tipo_estrategia == "rsi_options":
+            ro_cfg = RsiOptionsConfig(**{
+                k: v for k, v in slot.config.items()
+                if k in RsiOptionsConfig.__dataclass_fields__
+            })
+            strategy = RsiOptionsStrategy(oms, ro_cfg)
         elif slot.tipo_estrategia == "acciones_ema":
             ae_cfg = AccionesEMAConfig(**{
                 k: v for k, v in slot.config.items()
@@ -655,6 +686,12 @@ class TradingEngine:
 
             # OMS hook (poll órdenes + cierre automático 16:45)
             await _slot._oms.on_snapshot(snapshot)
+
+            # ── Fuera de horario de mercado: no analizar ──────────────────
+            from datetime import datetime, time as _t, timezone, timedelta
+            _now_arg = datetime.now(tz=timezone(timedelta(hours=-3))).time()
+            if not (_t(10, 30) <= _now_arg < _t(17, 0)):
+                return
 
             # ── Max Drawdown (Global Stop Loss) ──
             max_drawdown = _slot.config.get("max_drawdown_ars", 0)
@@ -803,6 +840,51 @@ class TradingEngine:
                     }]
 
 
+            elif _slot.tipo_estrategia == "rsi_options":
+                ro: RsiOptionsStrategy = _slot._strategy  # type: ignore[assignment]
+
+                from datetime import datetime, time, timezone, timedelta
+                _TZ_ARG = timezone(timedelta(hours=-3))
+                now_arg = datetime.now(tz=_TZ_ARG).time()
+                if ro._config.force_intraday_close and time(16, 45) <= now_arg < time(17, 0):
+                    await ro.cerrar_todos(snapshot)
+                else:
+                    await ro.on_snapshot(snapshot)
+
+                indicators = ro._last_indicators
+                if not indicators:
+                    min_data = ro._config.rsi_periodos + 1
+                    pts = len(ro._price_history)
+                    remaining = min_data - pts
+                    eta_min = (remaining * 30) / 60
+                    _slot.add_log("INFO",
+                        f"⏳ WARMUP {pts}/{min_data} snapshots — faltan ~{remaining} ticks (~{eta_min:.1f} min) "
+                        f"para calcular RSI{ro._config.rsi_periodos}"
+                    )
+                else:
+                    rsi_val = indicators.get("rsi", 0)
+                    spot_now = indicators.get("spot", 0)
+                    cfg_ro = ro._config
+                    if rsi_val > cfg_ro.rsi_overbought:
+                        zona = f"⬆️ SOBRECOMPRA (>{cfg_ro.rsi_overbought:.0f}) → señal PUT"
+                    elif rsi_val < cfg_ro.rsi_oversold:
+                        zona = f"⬇️ SOBREVENTA (<{cfg_ro.rsi_oversold:.0f}) → señal CALL"
+                    else:
+                        zona = "— zona neutral"
+                    _slot.add_log("INFO",
+                        f"📊 RSI{cfg_ro.rsi_periodos}={rsi_val:.1f} | spot={spot_now:.2f} {zona}"
+                    )
+
+                if ro._last_signal:
+                    sig = ro._last_signal
+                    _slot.last_signals = [{
+                        "simbolo": sig.opcion.quote.simbolo,
+                        "lado": f"COMPRA {sig.direccion}",
+                        "precio": sig.precio_limite,
+                        "razon": sig.razon,
+                        "score": round(sig.score, 4),
+                    }]
+
             else:
                 # options_mispricing (default)
                 pricings = enrich_snapshot(snapshot, r=DEFAULT_RISK_FREE_RATE)
@@ -859,6 +941,12 @@ class TradingEngine:
 
             async def _on_stock_snapshot(stock_snap: StockSnapshot, _slot=slot) -> None:
                 if _slot.estado != "running":
+                    return
+
+                # ── Fuera de horario de mercado: no analizar ──────────────
+                from datetime import datetime, time as _t, timezone, timedelta
+                _now_arg = datetime.now(tz=timezone(timedelta(hours=-3))).time()
+                if not (_t(10, 30) <= _now_arg < _t(17, 0)):
                     return
 
                 # Max Drawdown global
