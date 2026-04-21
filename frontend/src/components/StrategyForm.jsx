@@ -20,6 +20,17 @@ export default function StrategyForm({ onClose, onCreated, strategyTypes }) {
   const [loadingAi, setLoadingAi] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState(null);
   const [error, setError] = useState(null);
+  const [fundsInfo, setFundsInfo] = useState(null);
+
+  // Al abrir el form, obtener liquidez disponible y pre-llenar fondos
+  useEffect(() => {
+    api.getAvailableFunds().then(data => {
+      setFundsInfo(data);
+      if (data.disponible_neto > 0) {
+        setForm(prev => ({ ...prev, fondos_asignados: Math.floor(data.disponible_neto / 1000) * 1000 }));
+      }
+    }).catch(() => {});
+  }, []);
 
   // Cargar defaults del tipo seleccionado
   useEffect(() => {
@@ -210,9 +221,19 @@ Asegúrate de que el JSON sea perfectamente válido sin texto markdown adicional
                 value={form.fondos_asignados || ''}
                 onChange={(e) => handleChange('fondos_asignados', parseFloat(e.target.value) || 0)}
               />
-              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.25rem', display: 'block' }}>
-                Dejá en 0 para operar sin límite de fondos.
-              </span>
+              {fundsInfo ? (
+                <span style={{ fontSize: '0.7rem', marginTop: '0.25rem', display: 'block', color: fundsInfo.disponible_neto > 0 ? 'var(--color-profit)' : 'var(--color-loss)' }}>
+                  IOL líquido: {new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(fundsInfo.disponible_iol)}
+                  {fundsInfo.asignado_bots > 0 && (
+                    <> — Bots activos: −{new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(fundsInfo.asignado_bots)}</>
+                  )}
+                  {' '}→ Disponible: {new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(fundsInfo.disponible_neto)}
+                </span>
+              ) : (
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.25rem', display: 'block' }}>
+                  Dejá en 0 para operar sin límite de fondos.
+                </span>
+              )}
             </div>
 
             {/* Modo toggle */}

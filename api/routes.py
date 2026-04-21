@@ -70,6 +70,36 @@ async def get_account() -> dict:
     return await engine.get_account_info()
 
 
+@router.get("/available-funds")
+async def get_available_funds() -> dict:
+    """Liquidez IOL disponible menos fondos ya asignados a bots activos."""
+    engine = get_engine()
+    try:
+        account = await engine.get_account_info()
+        cuentas = account.get("cuentas", [])
+        ars = next(
+            (c for c in cuentas if "peso" in str(c.get("moneda", "")).lower()
+             or str(c.get("moneda", "")).upper() == "ARS"),
+            cuentas[0] if cuentas else {},
+        )
+        disponible_iol = float(ars.get("disponible", 0) or 0)
+    except Exception:
+        disponible_iol = 0.0
+
+    slots = engine.get_all_slots()
+    asignado_bots = sum(
+        float(s.get("fondos_asignados", 0) or 0)
+        for s in slots
+        if s.get("fondos_asignados", 0) > 0
+    )
+
+    return {
+        "disponible_iol": disponible_iol,
+        "asignado_bots": asignado_bots,
+        "disponible_neto": max(0.0, disponible_iol - asignado_bots),
+    }
+
+
 @router.get("/portfolio")
 async def get_portfolio() -> dict:
     engine = get_engine()

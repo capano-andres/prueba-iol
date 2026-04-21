@@ -35,6 +35,7 @@ async function request(path, options = {}, timeoutMs = 15000) {
 export const api = {
   getStatus: () => request('/status'),
   getAccount: () => request('/account'),
+  getAvailableFunds: () => request('/available-funds'),
   getPortfolio: () => request('/portfolio'),
   getOperations: () => request('/operations'),
   getStrategyTypes: () => request('/strategy-types'),
