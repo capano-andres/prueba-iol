@@ -53,7 +53,7 @@ class RsiOptionsConfig:
     max_dte: int = 45
     """DTE máximo."""
 
-    max_spread_pct: float = 0.25
+    max_spread_pct: float = 0.40
     """Spread bid-ask máximo tolerable en la opción."""
 
     # ── Gestión de riesgo ────────────────────────────────────────────────
@@ -120,6 +120,7 @@ class RsiOptionsStrategy:
 
         self._last_signal: RsiOptionsSignal | None = None
         self._last_indicators: dict = {}
+        self._last_order_attempt: dict | None = None  # {"direccion", "resultado", "razon"}
 
     # ── RSI ───────────────────────────────────────────────────────────────
 
@@ -234,12 +235,22 @@ class RsiOptionsStrategy:
 
         for p in self._oms.posiciones_abiertas():
             if p.tipo == tipo:
-                logger.debug("RSI: ya tenemos posición %s abierta, ignorando.", tipo)
+                self._last_order_attempt = {"direccion": tipo, "resultado": "bloqueado", "razon": f"Ya hay posición {tipo} abierta"}
                 return
 
         opcion = self._seleccionar_opcion(pricings, tipo)
         if opcion is None:
-            logger.warning("RSI: no se encontró %s viable (DTE/liquidez/delta).", tipo)
+            # Diagnosticar por qué no hay candidatos
+            total = sum(1 for p in pricings if p.quote.tipo == tipo)
+            sin_liquidez = sum(1 for p in pricings if p.quote.tipo == tipo and (p.quote.bid is None or p.quote.ask is None))
+            fuera_dte = sum(1 for p in pricings if p.quote.tipo == tipo and p.quote.bid is not None
+                           and not (cfg.min_dte <= p.quote.dias_al_vencimiento <= cfg.max_dte))
+            sin_iv = sum(1 for p in pricings if p.quote.tipo == tipo and p.quote.bid is not None
+                        and (cfg.min_dte <= p.quote.dias_al_vencimiento <= cfg.max_dte)
+                        and (p.greeks.delta is None or p.greeks.iv is None))
+            razon = f"{tipo}: {total} opciones — sin_liquidez={sin_liquidez} fuera_dte={fuera_dte} sin_iv={sin_iv} (DTE {cfg.min_dte}–{cfg.max_dte})"
+            logger.warning("RSI: no se encontró %s viable. %s", tipo, razon)
+            self._last_order_attempt = {"direccion": tipo, "resultado": "sin_opcion", "razon": razon}
             return
 
         q = opcion.quote
@@ -272,8 +283,11 @@ class RsiOptionsStrategy:
         )
 
         if order.estado.value in ("rechazada", "cancelada"):
-            logger.warning("RSI Options: Orden rechazada para %s: %s", q.simbolo, order.estado.value)
+            razon_rechazo = f"Orden rechazada por OMS/IOL: {q.simbolo} → {order.estado.value}"
+            logger.warning("RSI Options: %s", razon_rechazo)
+            self._last_order_attempt = {"direccion": tipo, "resultado": "rechazada", "razon": razon_rechazo}
         else:
+            self._last_order_attempt = {"direccion": tipo, "resultado": "ok", "razon": signal.informacion}
             self._cooldown_counter = cfg.cooldown_snapshots
 
     # ── Monitoreo de posiciones (SL/TP) ───────────────────────────────────

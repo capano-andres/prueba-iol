@@ -136,7 +136,7 @@ STRATEGY_TYPES = {
             {"key": "target_delta",       "label": "Delta Objetivo",        "type": "float", "default": 0.50, "descripcion": "Delta absoluto para seleccionar opción. 0.50 = ATM (At The Money)."},
             {"key": "min_dte",            "label": "Min DTE",               "type": "int",   "default": 5,    "descripcion": "Días mínimos al vencimiento."},
             {"key": "max_dte",            "label": "Max DTE",               "type": "int",   "default": 45,   "descripcion": "Días máximos al vencimiento."},
-            {"key": "max_spread_pct",     "label": "Max Spread Bid-Ask",    "type": "float", "default": 0.25, "descripcion": "Spread bid-ask máximo tolerable. Ejemplo: 0.25 = 25%."},
+            {"key": "max_spread_pct",     "label": "Max Spread Bid-Ask",    "type": "float", "default": 0.40, "descripcion": "Spread bid-ask máximo tolerable. Opciones GGAL suelen tener spreads del 30–40%."},
             {"key": "stop_loss_pct",      "label": "Stop Loss %",           "type": "float", "default": 0.20, "descripcion": "Vender si la prima cae este %. Ejemplo: 0.20 = vender si pierde -20%."},
             {"key": "take_profit_pct",    "label": "Take Profit %",         "type": "float", "default": 0.40, "descripcion": "Vender si la prima sube este %. Ejemplo: 0.40 = tomar ganancia al +40%."},
             {"key": "lotes_por_trade",    "label": "Lotes por Trade",       "type": "int",   "default": 1,    "descripcion": "Contratos a comprar por señal."},
@@ -874,6 +874,21 @@ class TradingEngine:
                     _slot.add_log("INFO",
                         f"📊 RSI{cfg_ro.rsi_periodos}={rsi_val:.1f} | spot={spot_now:.2f} {zona}"
                     )
+
+                # Mostrar resultado del último intento de entrada
+                attempt = ro._last_order_attempt
+                if attempt:
+                    resultado = attempt.get("resultado")
+                    razon_attempt = attempt.get("razon", "")
+                    if resultado == "ok":
+                        _slot.add_log("INFO", f"✅ Orden enviada: {razon_attempt}")
+                    elif resultado == "sin_opcion":
+                        _slot.add_log("WARNING", f"⚠️ Señal RSI sin opción viable: {razon_attempt}")
+                    elif resultado == "rechazada":
+                        _slot.add_log("WARNING", f"🚫 {razon_attempt}")
+                    elif resultado == "bloqueado":
+                        _slot.add_log("INFO", f"⏸ {razon_attempt}")
+                    ro._last_order_attempt = None  # limpiar para no re-loguear
 
                 if ro._last_signal:
                     sig = ro._last_signal
