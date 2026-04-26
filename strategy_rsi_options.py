@@ -18,6 +18,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from candles import CandleAggregator
 from market_data import MarketSnapshot
 from math_engine import OptionPricing, enrich_snapshot, DEFAULT_RISK_FREE_RATE
 
@@ -42,6 +43,10 @@ class RsiOptionsConfig:
 
     rsi_oversold: float = 30.0
     """RSI por debajo de este umbral → comprar CALL (sobreventa)."""
+
+    # ── Timeframe de velas ───────────────────────────────────────────────
+    candle_minutes: int = 5
+    """Tamaño de vela OHLC en minutos. Se construyen agregando ticks del spot."""
 
     # ── Selección de opciones ────────────────────────────────────────────
     target_delta: float = 0.50
@@ -115,7 +120,7 @@ class RsiOptionsStrategy:
         self._oms = oms
         self._config = config or RsiOptionsConfig()
 
-        self._price_history: list[float] = []
+        self._aggregator = CandleAggregator(timeframe_min=self._config.candle_minutes)
         self._cooldown_counter: int = 0
 
         self._last_signal: RsiOptionsSignal | None = None
@@ -186,26 +191,42 @@ class RsiOptionsStrategy:
         if spot is None or spot <= 0:
             return
 
-        self._price_history.append(spot)
-        if len(self._price_history) > 500:
-            self._price_history = self._price_history[-500:]
-
-        cfg = self._config
-        min_data = cfg.rsi_periodos + 1
-
-        if len(self._price_history) < min_data:
+        # Defense in depth: no analizar fuera de horario de mercado
+        from datetime import datetime, time as _t, timezone, timedelta
+        _now_arg = datetime.now(tz=timezone(timedelta(hours=-3))).time()
+        if not (_t(10, 30) <= _now_arg < _t(17, 0)):
             return
 
-        rsi = self._calc_rsi(self._price_history, cfg.rsi_periodos)
+        cfg = self._config
+
+        # Agregar tick al constructor de velas
+        closed_candle = self._aggregator.add_tick(spot)
+        closes = self._aggregator.closes
+
+        # Calcular RSI sobre cierres de velas cerradas
+        if len(closes) >= cfg.rsi_periodos + 1:
+            rsi = self._calc_rsi(closes, cfg.rsi_periodos)
+        else:
+            rsi = None
+
         self._last_indicators = {
-            "rsi": round(rsi, 1),
+            "rsi": round(rsi, 1) if rsi is not None else None,
             "spot": spot,
-            "data_points": len(self._price_history),
+            "candles_closed": len(closes),
+            "tf_min": cfg.candle_minutes,
+            "warmup": rsi is None,
         }
 
         pricings = enrich_snapshot(snapshot, r=DEFAULT_RISK_FREE_RATE)
 
+        # Monitoreo SL/TP corre en cada tick (no esperamos cierre de vela para salir)
         await self._monitorear_posiciones(snapshot, pricings)
+
+        # Las decisiones de entrada solo se evalúan al CIERRE de una vela
+        if closed_candle is None:
+            return  # estamos a mitad de vela
+        if rsi is None:
+            return  # warmup pendiente
 
         if self._cooldown_counter > 0:
             self._cooldown_counter -= 1
@@ -216,10 +237,10 @@ class RsiOptionsStrategy:
             return
 
         if rsi > cfg.rsi_overbought:
-            logger.info("RSI=%.1f > %.0f (sobrecompra) → señal PUT", rsi, cfg.rsi_overbought)
+            logger.info("RSI=%.1f > %.0f (sobrecompra, vela %dm cerrada) → señal PUT", rsi, cfg.rsi_overbought, cfg.candle_minutes)
             await self._intentar_entrada("PUT", pricings, spot, rsi)
         elif rsi < cfg.rsi_oversold:
-            logger.info("RSI=%.1f < %.0f (sobreventa) → señal CALL", rsi, cfg.rsi_oversold)
+            logger.info("RSI=%.1f < %.0f (sobreventa, vela %dm cerrada) → señal CALL", rsi, cfg.rsi_oversold, cfg.candle_minutes)
             await self._intentar_entrada("CALL", pricings, spot, rsi)
 
     # ── Entrada ───────────────────────────────────────────────────────────

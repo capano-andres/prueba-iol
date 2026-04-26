@@ -12,8 +12,10 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Any
+
+_TZ_ARG = timezone(timedelta(hours=-3))
 
 from dotenv import load_dotenv
 
@@ -130,7 +132,8 @@ STRATEGY_TYPES = {
             "Sin EMA — señales más frecuentes que Daytrading. Solo compra opciones, nunca lanza."
         ),
         "params": [
-            {"key": "rsi_periodos",       "label": "RSI Períodos",          "type": "int",   "default": 14,   "descripcion": "Períodos para calcular el RSI. Cada período = 1 snapshot (~30s)."},
+            {"key": "rsi_periodos",       "label": "RSI Períodos",          "type": "int",   "default": 14,   "descripcion": "Períodos para calcular el RSI. Cada período = 1 vela cerrada."},
+            {"key": "candle_minutes",     "label": "Vela (minutos)",        "type": "int",   "default": 5,    "descripcion": "Tamaño de vela OHLC. 5m es estándar para daytrading. Warmup ≈ (RSI Períodos + 1) × este valor."},
             {"key": "rsi_overbought",     "label": "RSI Sobrecompra",       "type": "float", "default": 70.0, "descripcion": "RSI por encima de este nivel → comprar PUT (mercado recalentado)."},
             {"key": "rsi_oversold",       "label": "RSI Sobreventa",        "type": "float", "default": 30.0, "descripcion": "RSI por debajo de este nivel → comprar CALL (mercado colapsado)."},
             {"key": "target_delta",       "label": "Delta Objetivo",        "type": "float", "default": 0.50, "descripcion": "Delta absoluto para seleccionar opción. 0.50 = ATM (At The Money)."},
@@ -217,7 +220,7 @@ class StrategySlot:
 
     def add_log(self, level: str, message: str) -> None:
         entry = {
-            "ts": datetime.now().strftime("%H:%M:%S"),
+            "ts": datetime.now(tz=_TZ_ARG).strftime("%H:%M:%S"),
             "level": level,
             "message": message,
         }
@@ -852,19 +855,20 @@ class TradingEngine:
                     await ro.on_snapshot(snapshot)
 
                 indicators = ro._last_indicators
-                if not indicators:
-                    min_data = ro._config.rsi_periodos + 1
-                    pts = len(ro._price_history)
-                    remaining = min_data - pts
-                    eta_min = (remaining * 30) / 60
+                cfg_ro = ro._config
+                if not indicators or indicators.get("warmup"):
+                    n = indicators.get("candles_closed", 0) if indicators else 0
+                    target = cfg_ro.rsi_periodos + 1
+                    remaining = max(0, target - n)
+                    eta_min = remaining * cfg_ro.candle_minutes
                     _slot.add_log("INFO",
-                        f"⏳ WARMUP {pts}/{min_data} snapshots — faltan ~{remaining} ticks (~{eta_min:.1f} min) "
-                        f"para calcular RSI{ro._config.rsi_periodos}"
+                        f"⏳ WARMUP {n}/{target} velas {cfg_ro.candle_minutes}m — faltan ~{remaining} velas (~{eta_min} min) "
+                        f"para calcular RSI{cfg_ro.rsi_periodos}"
                     )
                 else:
-                    rsi_val = indicators.get("rsi", 0)
+                    rsi_val = indicators.get("rsi") or 0
                     spot_now = indicators.get("spot", 0)
-                    cfg_ro = ro._config
+                    tf = indicators.get("tf_min", cfg_ro.candle_minutes)
                     if rsi_val > cfg_ro.rsi_overbought:
                         zona = f"⬆️ SOBRECOMPRA (>{cfg_ro.rsi_overbought:.0f}) → señal PUT"
                     elif rsi_val < cfg_ro.rsi_oversold:
@@ -872,7 +876,7 @@ class TradingEngine:
                     else:
                         zona = "— zona neutral"
                     _slot.add_log("INFO",
-                        f"📊 RSI{cfg_ro.rsi_periodos}={rsi_val:.1f} | spot={spot_now:.2f} {zona}"
+                        f"📊 RSI{cfg_ro.rsi_periodos}({tf}m)={rsi_val:.1f} | spot={spot_now:.2f} {zona}"
                     )
 
                 # Mostrar resultado del último intento de entrada
