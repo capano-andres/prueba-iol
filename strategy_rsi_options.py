@@ -261,17 +261,86 @@ class RsiOptionsStrategy:
 
         opcion = self._seleccionar_opcion(pricings, tipo)
         if opcion is None:
-            # Diagnosticar por qué no hay candidatos
-            total = sum(1 for p in pricings if p.quote.tipo == tipo)
-            sin_liquidez = sum(1 for p in pricings if p.quote.tipo == tipo and (p.quote.bid is None or p.quote.ask is None))
-            fuera_dte = sum(1 for p in pricings if p.quote.tipo == tipo and p.quote.bid is not None
-                           and not (cfg.min_dte <= p.quote.dias_al_vencimiento <= cfg.max_dte))
-            sin_iv = sum(1 for p in pricings if p.quote.tipo == tipo and p.quote.bid is not None
-                        and (cfg.min_dte <= p.quote.dias_al_vencimiento <= cfg.max_dte)
-                        and (p.greeks.delta is None or p.greeks.iv is None))
-            razon = f"{tipo}: {total} opciones — sin_liquidez={sin_liquidez} fuera_dte={fuera_dte} sin_iv={sin_iv} (DTE {cfg.min_dte}–{cfg.max_dte})"
-            logger.warning("RSI: no se encontró %s viable. %s", tipo, razon)
-            self._last_order_attempt = {"direccion": tipo, "resultado": "sin_opcion", "razon": razon}
+            # ── Diagnóstico granular por opción ────────────────────────────
+            buckets = {"sin_bid": 0, "sin_ask": 0, "fuera_dte": 0, "spread_alto": 0, "sin_iv": 0, "candidato": 0}
+            muestras: list[tuple[float, dict]] = []
+
+            for p in pricings:
+                if p.quote.tipo != tipo:
+                    continue
+                q = p.quote
+
+                estado = {
+                    "simbolo": q.simbolo,
+                    "K": q.strike,
+                    "dte": q.dias_al_vencimiento,
+                    "bid": q.bid,
+                    "ask": q.ask,
+                    "ult": q.ultimo,
+                    "puntas_raw": q.puntas_raw,
+                }
+
+                # Clasificar por orden de filtros
+                if q.bid is None:
+                    bucket = "sin_bid"
+                elif q.ask is None or q.ask <= 0:
+                    bucket = "sin_ask"
+                elif not (cfg.min_dte <= q.dias_al_vencimiento <= cfg.max_dte):
+                    bucket = "fuera_dte"
+                elif q.spread_pct is not None and q.spread_pct > cfg.max_spread_pct:
+                    bucket = "spread_alto"
+                    estado["spread"] = f"{q.spread_pct * 100:.0f}%"
+                elif p.greeks.delta is None or p.greeks.iv is None:
+                    bucket = "sin_iv"
+                else:
+                    bucket = "candidato"
+                    estado["delta"] = round(p.greeks.delta, 2)
+                    estado["iv"] = f"{p.greeks.iv * 100:.0f}%"
+
+                estado["bucket"] = bucket
+                buckets[bucket] += 1
+                muestras.append((abs(q.strike - spot), estado))
+
+            # Top 3 PUTs/CALLs más cercanas a ATM
+            muestras.sort(key=lambda x: x[0])
+            top3 = [e for _, e in muestras[:3]]
+
+            total = sum(buckets.values())
+            desglose_str = (
+                f"sin_bid={buckets['sin_bid']} sin_ask={buckets['sin_ask']} "
+                f"fuera_dte={buckets['fuera_dte']} spread_alto={buckets['spread_alto']} "
+                f"sin_iv={buckets['sin_iv']} candidato={buckets['candidato']}"
+            )
+
+            # Construir las líneas para el UI log
+            desglose_lines: list[str] = [
+                f"⚠️ Sin {tipo} viable. {total} totales — {desglose_str}",
+                f"Top 3 cerca de ATM (spot={spot:.0f}, DTE {cfg.min_dte}–{cfg.max_dte}, max_spread={cfg.max_spread_pct * 100:.0f}%):",
+            ]
+            for e in top3:
+                bid_s = "null" if e["bid"] is None else f"{e['bid']:.2f}"
+                ask_s = "null" if e["ask"] is None else f"{e['ask']:.2f}"
+                ult_s = "null" if e["ult"] is None else f"{e['ult']:.2f}"
+                extras = []
+                if "spread" in e: extras.append(f"spread={e['spread']}")
+                if "delta" in e: extras.append(f"Δ={e['delta']}")
+                if "iv" in e: extras.append(f"IV={e['iv']}")
+                extras_s = (" " + " ".join(extras)) if extras else ""
+                desglose_lines.append(
+                    f"  {e['simbolo']} K={e['K']:.0f} dte={e['dte']} bid={bid_s} ask={ask_s} ult={ult_s}{extras_s} → {e['bucket']}"
+                )
+                # Para sin_bid/sin_ask, agregar el dato crudo de IOL para depurar
+                if e["bucket"] in ("sin_bid", "sin_ask"):
+                    desglose_lines.append(f"    puntas_raw={e['puntas_raw']!r}")
+
+            razon_principal = f"{tipo}: {desglose_str} (DTE {cfg.min_dte}–{cfg.max_dte})"
+            logger.warning("RSI: no se encontró %s viable. %s", tipo, razon_principal)
+            self._last_order_attempt = {
+                "direccion": tipo,
+                "resultado": "sin_opcion",
+                "razon": razon_principal,
+                "desglose": desglose_lines,
+            }
             return
 
         q = opcion.quote

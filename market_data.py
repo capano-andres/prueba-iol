@@ -49,6 +49,7 @@ class OptionQuote:
     ultimo:    float | None
     volumen:   int   | None
     timestamp: float = field(default_factory=time.monotonic)
+    puntas_raw: object = None  # valor crudo del campo `puntas` de IOL (debug)
 
     @property
     def mid(self) -> float | None:
@@ -260,6 +261,7 @@ def _to_option_quote(raw: dict) -> "OptionQuote | None":
         ask=ask,
         ultimo=ultimo,
         volumen=volumen,
+        puntas_raw=puntas,
     )
 
 
@@ -383,6 +385,19 @@ class MarketDataFeed:
             self._subyacente, spot, len(raw_opts), len(opciones),
             n_calls, n_puts, n_con_puntas,
         )
+
+        # Diagnóstico cuando la liquidez agregada es baja (< 20% de las opciones con bid/ask)
+        if opciones and spot and n_con_puntas < max(1, len(opciones) // 5):
+            for tipo in ("CALL", "PUT"):
+                muestra = sorted(
+                    (o for o in opciones if o.tipo == tipo),
+                    key=lambda o: abs(o.strike - spot),
+                )[:3]
+                for o in muestra:
+                    logger.warning(
+                        "🔍 RAW %s K=%.0f bid=%s ask=%s ult=%s puntas=%r",
+                        o.simbolo, o.strike, o.bid, o.ask, o.ultimo, o.puntas_raw,
+                    )
 
         return MarketSnapshot(ts=datetime.now(), spot=spot, opciones=opciones)
 

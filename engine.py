@@ -887,7 +887,13 @@ class TradingEngine:
                     if resultado == "ok":
                         _slot.add_log("INFO", f"✅ Orden enviada: {razon_attempt}")
                     elif resultado == "sin_opcion":
-                        _slot.add_log("WARNING", f"⚠️ Señal RSI sin opción viable: {razon_attempt}")
+                        # Desplegar el desglose como múltiples líneas si está disponible
+                        desglose = attempt.get("desglose") or []
+                        if desglose:
+                            for linea in desglose:
+                                _slot.add_log("WARNING", linea)
+                        else:
+                            _slot.add_log("WARNING", f"⚠️ Señal RSI sin opción viable: {razon_attempt}")
                     elif resultado == "rechazada":
                         _slot.add_log("WARNING", f"🚫 {razon_attempt}")
                     elif resultado == "bloqueado":
