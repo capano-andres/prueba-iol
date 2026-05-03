@@ -146,6 +146,7 @@ STRATEGY_TYPES = {
             {"key": "max_posiciones",     "label": "Max Posiciones",        "type": "int",   "default": 2,    "descripcion": "Máximo de posiciones abiertas simultáneas."},
             {"key": "cooldown_snapshots", "label": "Cooldown (snapshots)",  "type": "int",   "default": 5,    "descripcion": "Snapshots de espera post-entrada antes de volver a operar (~2.5 min)."},
             {"key": "force_intraday_close", "label": "Cierre Intradiario", "type": "bool",  "default": True,  "descripcion": "Forzar cierre total a las 16:45 para bonificación IOL."},
+            {"key": "permitir_ultimo_como_ask", "label": "Permitir último como ask", "type": "bool", "default": False, "descripcion": "Si no hay bid/ask en el book, usá el último precio operado como ask (solo si hubo volumen hoy). Útil en GGAL donde muchas opciones tienen book vacío entre trades. RIESGO: ultimo puede ser stale."},
             {"key": "max_drawdown_ars",   "label": "Stop Loss Global (ARS)", "type": "int", "default": 0,    "descripcion": "Corta todo si la pérdida acumulada supera este monto. 0 = sin límite."},
         ],
     },

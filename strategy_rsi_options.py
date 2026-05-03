@@ -82,6 +82,13 @@ class RsiOptionsConfig:
     force_intraday_close: bool = True
     """Cerrar todo a las 16:45 para bonificación IOL."""
 
+    # ── Fallback de precio cuando no hay book ────────────────────────────
+    permitir_ultimo_como_ask: bool = False
+    """Si True y no hay bid/ask, usa el último precio como ask sintético
+    (solo si la opción tiene volumen operado hoy).
+    Útil en GGAL: muchas opciones operan pocas veces al día y entre trades el book queda vacío.
+    Riesgo: el ultimo puede ser de hace varias horas y estar stale."""
+
 
 # ─── Señal de trading ─────────────────────────────────────────────────────────
 
@@ -149,40 +156,63 @@ class RsiOptionsStrategy:
         self,
         pricings: list[OptionPricing],
         tipo: str,
-    ) -> OptionPricing | None:
+    ) -> tuple[OptionPricing, float, bool] | None:
+        """
+        Retorna (opción, precio_compra, usó_sintético) o None si nada pasa los filtros.
+        - precio_compra: ask real, o ultimo si se activó el fallback
+        - usó_sintético: True si se usa ultimo en vez de ask real
+        """
         cfg = self._config
-        candidatos: list[tuple[float, OptionPricing]] = []
+        candidatos: list[tuple[float, OptionPricing, float, bool]] = []
 
         for p in pricings:
             q = p.quote
             if q.tipo != tipo:
                 continue
-            if q.bid is None or q.ask is None or q.ask <= 0:
-                continue
-            spread = q.spread_pct
-            if spread is None or spread > cfg.max_spread_pct:
-                continue
+
             dte = q.dias_al_vencimiento
             if dte < cfg.min_dte or dte > cfg.max_dte:
                 continue
+
+            # Determinar precio de compra y si es sintético
+            tiene_book = (q.bid is not None and q.ask is not None and q.ask > 0)
+            usar_sintetico = False
+            precio_compra: float
+
+            if tiene_book:
+                spread = q.spread_pct
+                if spread is None or spread > cfg.max_spread_pct:
+                    continue
+                precio_compra = q.ask  # type: ignore[assignment]
+            elif (cfg.permitir_ultimo_como_ask
+                  and q.ultimo is not None and q.ultimo > 0
+                  and q.volumen is not None and q.volumen > 0):
+                # Fallback: ultimo como ask sintético (requiere volumen hoy)
+                precio_compra = q.ultimo
+                usar_sintetico = True
+            else:
+                continue
+
             if p.greeks.delta is None or p.greeks.iv is None:
                 continue
+
             delta_dist = abs(abs(p.greeks.delta) - cfg.target_delta)
-            candidatos.append((delta_dist, p))
+            candidatos.append((delta_dist, p, precio_compra, usar_sintetico))
 
         if not candidatos:
             logger.info("RSI: selección %s — 0 candidatos tras filtros (DTE/liquidez/delta)", tipo)
             return None
 
         candidatos.sort(key=lambda x: x[0])
-        best = candidatos[0][1]
+        _, best, precio, sintetico = candidatos[0]
         logger.info(
-            "RSI: selección %s — %d candidatos. Mejor=%s (K=%.1f Δ=%.2f ask=%.2f DTE=%d)",
+            "RSI: selección %s — %d candidatos. Mejor=%s (K=%.1f Δ=%.2f precio=%.2f%s DTE=%d)",
             tipo, len(candidatos), best.quote.simbolo,
-            best.quote.strike, best.greeks.delta, best.quote.ask or 0,
+            best.quote.strike, best.greeks.delta, precio,
+            " [sintético/ultimo]" if sintetico else "",
             best.quote.dias_al_vencimiento,
         )
-        return best
+        return (best, precio, sintetico)
 
     # ── API pública ───────────────────────────────────────────────────────
 
@@ -259,10 +289,19 @@ class RsiOptionsStrategy:
                 self._last_order_attempt = {"direccion": tipo, "resultado": "bloqueado", "razon": f"Ya hay posición {tipo} abierta"}
                 return
 
-        opcion = self._seleccionar_opcion(pricings, tipo)
-        if opcion is None:
+        seleccion = self._seleccionar_opcion(pricings, tipo)
+        if seleccion is None:
             # ── Diagnóstico granular por opción ────────────────────────────
-            buckets = {"sin_bid": 0, "sin_ask": 0, "fuera_dte": 0, "spread_alto": 0, "sin_iv": 0, "candidato": 0}
+            buckets = {
+                "sin_book_sin_volumen": 0,  # sin bid/ask Y sin operar hoy
+                "sin_book_con_volumen": 0,  # sin bid/ask pero operó hoy (potencial fallback)
+                "sin_bid": 0,
+                "sin_ask": 0,
+                "fuera_dte": 0,
+                "spread_alto": 0,
+                "sin_iv": 0,
+                "candidato": 0,
+            }
             muestras: list[tuple[float, dict]] = []
 
             for p in pricings:
@@ -277,14 +316,17 @@ class RsiOptionsStrategy:
                     "bid": q.bid,
                     "ask": q.ask,
                     "ult": q.ultimo,
+                    "vol": q.volumen,
                     "puntas_raw": q.puntas_raw,
                 }
 
                 # Clasificar por orden de filtros
-                if q.bid is None:
-                    bucket = "sin_bid"
-                elif q.ask is None or q.ask <= 0:
-                    bucket = "sin_ask"
+                tiene_book = (q.bid is not None and q.ask is not None and q.ask > 0)
+                if not tiene_book:
+                    if q.ultimo and q.ultimo > 0 and q.volumen and q.volumen > 0:
+                        bucket = "sin_book_con_volumen"
+                    else:
+                        bucket = "sin_book_sin_volumen"
                 elif not (cfg.min_dte <= q.dias_al_vencimiento <= cfg.max_dte):
                     bucket = "fuera_dte"
                 elif q.spread_pct is not None and q.spread_pct > cfg.max_spread_pct:
@@ -307,7 +349,8 @@ class RsiOptionsStrategy:
 
             total = sum(buckets.values())
             desglose_str = (
-                f"sin_bid={buckets['sin_bid']} sin_ask={buckets['sin_ask']} "
+                f"sin_book(s/vol)={buckets['sin_book_sin_volumen']} "
+                f"sin_book(c/vol)={buckets['sin_book_con_volumen']} "
                 f"fuera_dte={buckets['fuera_dte']} spread_alto={buckets['spread_alto']} "
                 f"sin_iv={buckets['sin_iv']} candidato={buckets['candidato']}"
             )
@@ -317,21 +360,29 @@ class RsiOptionsStrategy:
                 f"⚠️ Sin {tipo} viable. {total} totales — {desglose_str}",
                 f"Top 3 cerca de ATM (spot={spot:.0f}, DTE {cfg.min_dte}–{cfg.max_dte}, max_spread={cfg.max_spread_pct * 100:.0f}%):",
             ]
+            hay_potenciales_con_volumen = buckets["sin_book_con_volumen"] > 0
             for e in top3:
                 bid_s = "null" if e["bid"] is None else f"{e['bid']:.2f}"
                 ask_s = "null" if e["ask"] is None else f"{e['ask']:.2f}"
                 ult_s = "null" if e["ult"] is None else f"{e['ult']:.2f}"
+                vol_s = "null" if e["vol"] is None else f"{e['vol']}"
                 extras = []
                 if "spread" in e: extras.append(f"spread={e['spread']}")
                 if "delta" in e: extras.append(f"Δ={e['delta']}")
                 if "iv" in e: extras.append(f"IV={e['iv']}")
                 extras_s = (" " + " ".join(extras)) if extras else ""
                 desglose_lines.append(
-                    f"  {e['simbolo']} K={e['K']:.0f} dte={e['dte']} bid={bid_s} ask={ask_s} ult={ult_s}{extras_s} → {e['bucket']}"
+                    f"  {e['simbolo']} K={e['K']:.0f} dte={e['dte']} bid={bid_s} ask={ask_s} ult={ult_s} vol={vol_s}{extras_s} → {e['bucket']}"
                 )
-                # Para sin_bid/sin_ask, agregar el dato crudo de IOL para depurar
-                if e["bucket"] in ("sin_bid", "sin_ask"):
+                if e["bucket"].startswith("sin_book"):
                     desglose_lines.append(f"    puntas_raw={e['puntas_raw']!r}")
+
+            # Sugerencia accionable
+            if hay_potenciales_con_volumen and not cfg.permitir_ultimo_como_ask:
+                desglose_lines.append(
+                    f"💡 {buckets['sin_book_con_volumen']} opciones operaron hoy pero no tienen book ahora. "
+                    f"Activá 'Permitir último como ask' para usar el último precio como referencia."
+                )
 
             razon_principal = f"{tipo}: {desglose_str} (DTE {cfg.min_dte}–{cfg.max_dte})"
             logger.warning("RSI: no se encontró %s viable. %s", tipo, razon_principal)
@@ -343,26 +394,35 @@ class RsiOptionsStrategy:
             }
             return
 
+        opcion, precio, usado_sintetico = seleccion
         q = opcion.quote
-        precio = q.ask
 
         umbral = cfg.rsi_overbought if tipo == "PUT" else cfg.rsi_oversold
         distancia = abs(rsi - umbral)
+
+        razon_str = (
+            f"RSI={rsi:.1f} ({'sobrecompra' if tipo == 'PUT' else 'sobreventa'}) "
+            f"Δ={opcion.greeks.delta:.2f} IV={opcion.greeks.iv:.1%}"
+        )
+        if usado_sintetico:
+            razon_str += f" [precio=ultimo, sin book]"
 
         signal = RsiOptionsSignal(
             direccion=tipo,
             opcion=opcion,
             precio_limite=precio,
             cantidad=cfg.lotes_por_trade,
-            razon=(
-                f"RSI={rsi:.1f} ({'sobrecompra' if tipo == 'PUT' else 'sobreventa'}) "
-                f"Δ={opcion.greeks.delta:.2f} IV={opcion.greeks.iv:.1%}"
-            ),
+            razon=razon_str,
             score=distancia,
         )
         self._last_signal = signal
 
         logger.info("RSI Options: Abriendo → %s", signal.informacion)
+        if usado_sintetico:
+            logger.warning(
+                "RSI Options: usando ultimo=%.2f como ask sintético para %s (sin book activo, vol=%s)",
+                precio, q.simbolo, q.volumen,
+            )
 
         order = await self._oms.open_position(
             simbolo=q.simbolo,
